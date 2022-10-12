@@ -8,7 +8,7 @@ import os
 import utils.fmodule
 import ujson
 import time
-
+import copy
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']
 optimizer_list=['SGD', 'Adam']
@@ -28,7 +28,21 @@ def read_option():
     parser.add_argument('--lr_scheduler', help='type of the global learning rate scheduler', type=int, default=-1)
     # hyper-parameters of training in server side
     parser.add_argument('--num_rounds', help='number of communication rounds', type=int, default=20)
-    parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.2)
+    
+    ## For Bach
+    ## hyper-parameters of training
+    parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.2) # 0.3 / 1
+    parser.add_argument('--attacker_pct', help='percentage of attackers in data', type=float, default=0.05) # 0.05 / 0.1 / 0.2
+    parser.add_argument('--theta_delta', help='coefficient multiply with delta each round', type=float, default=1) # 0.5 / 0.8 / 1
+    parser.add_argument('--gamma_epsilon', help='coefficient multiply with epsilon (difference between grad of U and grad of W)', type=float, default=1) # 0.5 / 0.8 / 1
+    parser.add_argument('--unlearn_algorithm', type=int, default= 0) # 0/1/2/3
+    ## algo 0: ignore attacker
+    ## algo 1: remove attacker at current round
+    ## algo 2: unlearn 1: epsilon = 0 (lipschitz = 0)
+    ## algo 3: unlearn 2: epsilon != 0
+    ## end
+    
+    
     # hyper-parameters of local training
     parser.add_argument('--num_epochs', help='number of epochs when clients trainset on data;', type=int, default=5)
     parser.add_argument('--learning_rate', help='learning rate for inner solver;', type=float, default=0.1)
@@ -62,6 +76,11 @@ def read_option():
     parser.add_argument('--gamma', help='gamma in FedFA', type=float, default='0')
     parser.add_argument('--mu', help='mu in fedprox', type=float, default='0.1')
     
+    # attacker or not
+    parser.add_argument('--attack', help='normal or attack data', type= int, default= 1)
+    # clean or not
+    parser.add_argument('--clean_model', help='clean_model equals 1 in order to run clean model and 0 otherwise', type=int, default=0)
+    
     # server gpu
     parser.add_argument('--server_gpu_id', help='server process on this gpu', type=int, default=0)
     
@@ -70,11 +89,18 @@ def read_option():
     return option
 
 def setup_seed(seed):
+    # random.seed(1+seed)
+    # np.random.seed(21+seed)
+    # os.environ['PYTHONHASHSEED'] = str(seed)
+    # torch.manual_seed(12+seed)
+    # torch.cuda.manual_seed_all(123+seed)
     random.seed(1+seed)
     np.random.seed(21+seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
-    torch.manual_seed(12+seed)
-    torch.cuda.manual_seed_all(123+seed)
+    torch.manual_seed(12+seed) ##seed -> 4, 5 // 12 + seed -> 6 // 42 + seed -> 0 // 43 + seed -> ok // 3407 -> not ok
+    torch.cuda.manual_seed_all(123+seed) ## choose seed -> 6
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
 def initialize(option):
     # init fedtask
@@ -88,39 +114,88 @@ def initialize(option):
     utils.fmodule.TaskCalculator.setOP(getattr(importlib.import_module('torch.optim'), option['optimizer']))
     utils.fmodule.Model = getattr(importlib.import_module(bmk_model_path), 'Model')
     task_reader = getattr(importlib.import_module(bmk_core_path), 'TaskReader')(taskpath=os.path.join('fedtask', option['task']))
-    train_datas, valid_datas, test_data, client_names = task_reader.read_data()
+    train_datas, train_datas_attack, valid_datas, test_data, backtask_data, client_names = task_reader.read_data()
     num_clients = len(client_names)
     print("done")
 
+    # init data of attackers
+    s_atk = []
+    if option['attacker_pct'] == 0.2:
+        s_atk = [24, 52, 42, 90, 39, 0, 19, 84, 77, 68, 26, 92, 9, 8, 43, 4, 41, 6, 7, 18]
+    elif option['attacker_pct'] == 0.1:
+        s_atk = [0, 5, 66, 80, 53, 8, 78, 56, 60, 46]
+    elif option['attacker_pct'] == 0.05:
+        s_atk = [52, 99, 0, 15, 20]
+    else:
+        None
+    s_atk = [0, 1, 2]
+    option['attacker'] = s_atk
+    
+    # import pdb; pdb.set_trace()
+    import torchvision.transforms as transforms
+    # transform = transforms.Compose([
+    #     transforms.RandomHorizontalFlip(),
+    #     transforms.Normalize((0.1307, ), (0.3081,))])
+    for cid in range(num_clients):
+        if cid in s_atk:
+            train_datas_attack[cid] = copy.deepcopy(train_datas_attack[0])
+            ## eee
+            transform = transforms.Compose([
+                # transforms.RandomHorizontalFlip(),
+                transforms.Normalize((0.1307, ), (0.3081,))])
+            ##
+            train_datas_attack[cid].X = transform(train_datas_attack[cid].X)
+    
     # init client
-    print('init clients...', end='')
-    client_path = '%s.%s' % ('algorithm', option['algorithm'])
-    Client=getattr(importlib.import_module(client_path), 'Client')
-    clients = [Client(option, name = client_names[cid], train_data = train_datas[cid], valid_data = valid_datas[cid]) for cid in range(num_clients)]
-    print('done')
+    if option['attack'] == 0:
+        print('init clients...', end='')
+        client_path = '%s.%s' % ('algorithm', option['algorithm'])
+        Client=getattr(importlib.import_module(client_path), 'Client')
+        clients = [Client(option, name = client_names[cid], train_data = train_datas[cid], valid_data = valid_datas[cid]) for cid in range(num_clients)]
+        print('done')
+    else:
+        print('init clients...', end='')
+        client_path = '%s.%s' % ('algorithm', option['algorithm'])
+        Client=getattr(importlib.import_module(client_path), 'Client')
+        clients = [Client(option, name = client_names[cid], train_data = train_datas_attack[cid], valid_data = valid_datas[cid]) for cid in range(num_clients)]
+        print('done')
 
     # init server
     print("init server...", end='')
     server_path = '%s.%s' % ('algorithm', option['algorithm'])
-    server = getattr(importlib.import_module(server_path), 'Server')(option, utils.fmodule.Model().to(utils.fmodule.device), clients, test_data = test_data)
+    server = getattr(importlib.import_module(server_path), 'Server')(option, utils.fmodule.Model().to(utils.fmodule.device), clients, test_data = test_data, backtask_data = backtask_data)
     print('done')
     return server
+
+# def output_filename(option, server):
+#     header = "{}_".format(option["algorithm"])
+#     for para in server.paras_name: header = header + para + "{}_".format(option[para])
+#     output_name = header + "M{}_R{}_B{}_E{}_LR{:.4f}_P{:.2f}_S{}_LD{:.3f}_WD{:.3f}_DR{:.2f}_AC{:.2f}.json".format(
+#         option['model'],
+#         option['num_rounds'],
+#         option['batch_size'],
+#         option['num_epochs'],
+#         option['learning_rate'],
+#         option['proportion'],
+#         option['seed'],
+#         option['lr_scheduler']+option['learning_rate_decay'],
+#         option['weight_decay'],
+#         option['net_drop'],
+#         option['net_active'])
+#     return output_name
 
 def output_filename(option, server):
     header = "{}_".format(option["algorithm"])
     for para in server.paras_name: header = header + para + "{}_".format(option[para])
-    output_name = header + "M{}_R{}_B{}_E{}_LR{:.4f}_P{:.2f}_S{}_LD{:.3f}_WD{:.3f}_DR{:.2f}_AC{:.2f}.json".format(
+    output_name = header + "M{}_R{}_B{}_P{:.2f}_AP{:.2f}_TD{:.2f}_GE{:.2f}_ALG{}.json".format(
         option['model'],
         option['num_rounds'],
         option['batch_size'],
-        option['num_epochs'],
-        option['learning_rate'],
         option['proportion'],
-        option['seed'],
-        option['lr_scheduler']+option['learning_rate_decay'],
-        option['weight_decay'],
-        option['net_drop'],
-        option['net_active'])
+        option['attacker_pct'],
+        option['theta_delta'],
+        option['gamma_epsilon'],
+        option['unlearn_algorithm'])
     return output_name
 
 class Logger:
@@ -151,6 +226,9 @@ class Logger:
             print("{:<30s}{:.4f}".format(key+":", self.time_buf[key][-1]) + 's')
 
     def save(self, filepath):
+        ## print accuracy
+        print(self.output["test_accs"])
+        
         """Save the self.output as .json file"""
         if self.output=={}: return
         with open(filepath, 'w') as outf:
@@ -166,3 +244,7 @@ class Logger:
 
     def log(self, server=None):
         pass
+    
+def convert(o):
+    if isinstance(o, np.generic): return o.item()  
+    raise TypeError

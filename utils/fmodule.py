@@ -94,16 +94,21 @@ def log(m):
     """element-wise log"""
     return element_wise_func(m, torch.log)
 
+def abs(m):
+    """element-wise abs"""
+    return element_wise_func(m, torch.abs)
+
 def element_wise_func(m, func):
     if not m: return None
     res = Model().to(m.get_device())
     if m.ingraph:
         res.op_with_graph()
         ml = get_module_from_model(m)
-        for md in ml:
+        mlr = get_module_from_model(res)
+        for md, mr in zip(ml, mlr):
             rd = _modeldict_element_wise(md._parameters, func)
             for l in md._parameters.keys():
-                md._parameters[l] = rd[l]
+                mr._parameters[l] = rd[l]
     else:
         _modeldict_cp(res.state_dict(), _modeldict_element_wise(m.state_dict(), func))
     return res
@@ -178,6 +183,132 @@ def _model_sub(m1, m2):
     else:
         _modeldict_cp(res.state_dict(), _modeldict_sub(m1.state_dict(), m2.state_dict()))
     return res
+
+def _model_elementwise_divide(m1, m2):
+    op_with_graph = m1.ingraph or m2.ingraph
+    res = Model().to(m1.get_device())
+    if op_with_graph:
+        res.op_with_graph()
+        ml1 = get_module_from_model(m1)
+        ml2 = get_module_from_model(m2)
+        mlr = get_module_from_model(res)
+        for n1, n2, nr in zip(ml1, ml2, mlr):
+            rd = _modeldict_elementwise_divide(n1._parameters, n2._parameters)
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_elementwise_divide(m1.state_dict(), m2.state_dict()))
+    return res
+
+def _model_elementwise_multiply(m1, m2):
+    pass 
+
+def _model_specificial_layers(m, list_layers = ['fc2.weight', 'fc2.bias']):
+    op_with_graph = m.ingraph
+    res = Model().to(m.get_device())
+    if op_with_graph:
+        module_names = [name for name, _ in m.named_children()]
+        module_dict = {}
+        for name in module_names:
+            module_dict[name] = []
+        for layer in list_layers:
+            temp = layer.split(".")
+            module_dict[temp[0]].append(temp[1])
+
+        ml = get_module_from_model(m)
+        mlr = get_module_from_model(res)
+        res.op_with_graph()
+        for n, nr, name in zip(ml, mlr, module_names):
+            rd = _modeldict_specificial_layer(n._parameters, module_dict[name])
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_specificial_layer(m.state_dict(), list_layers))
+    return res
+
+def _model_avg_param(m, list_layers = []):
+    op_with_graph = m.ingraph
+    res = torch.tensor(0.).to(m.get_device())
+    if op_with_graph:
+        if list_layers == []:
+            ml = get_module_from_model(m)
+            for n in ml:
+                res += _modeldict_sum_param(n._parameters)
+            return res / 1663370      
+        else:
+            num_param = 0
+            module_names = [name for name, _ in m.named_children()]
+            module_dict = {}
+            for name in module_names:
+                module_dict[name] = []
+            for layer in list_layers:
+                temp = layer.split(".")
+                module_dict[temp[0]].append(temp[1])
+            ml = get_module_from_model(m)
+            for n, name in zip(ml, module_names):
+                for l in n._parameters.keys():
+                    if l in module_dict[name]:
+                        if n._parameters[l] is None: continue
+                        if n._parameters[l].dtype not in [torch.float, torch.float32, torch.float64]: continue
+                        res += torch.sum(n._parameters[l])
+                        num_param += torch.numel(n._parameters[l])
+            return res / num_param
+    else:
+        if list_layers == []:
+            return _modeldict_sum_param(m.state_dict()) / 1663370
+        else:
+            num_param = 0
+            for param in m.state_dict().keys():
+                if param in list_layers:
+                    if m.state_dict()[param] is None: continue
+                    if m.state_dict()[param].dtype not in [torch.float, torch.float32, torch.float64]: continue
+                    num_param += torch.numel(m.state_dict()[param])
+                    res += torch.sum(m.state_dict()[param])
+            return res / num_param
+
+def _model_max_element(m, list_layers = []):
+    op_with_graph = m.ingraph
+    res = float("-Inf")
+    if op_with_graph:
+        if list_layers == []:
+            ml = get_module_from_model(m)
+            for n in ml:
+                temp = _modeldict_max_element(n._parameters)
+                if res < temp:
+                    res = temp
+            return res
+        else:
+            module_names = [name for name, _ in m.named_children()]
+            module_dict = {}
+            for name in module_names:
+                module_dict[name] = []
+            for layer in list_layers:
+                temp = layer.split(".")
+                module_dict[temp[0]].append(temp[1])
+            ml = get_module_from_model(m)
+            for n, name in zip(ml, module_names):
+                for l in n._parameters.keys():
+                    if l in module_dict[name]:
+                        if n._parameters[l] is None: continue
+                        if n._parameters[l].dtype not in [torch.float, torch.float32, torch.float64]: continue
+                        temp = torch.max(n._parameters[l])
+                        if res < temp:
+                            res = temp
+            return res
+    else:
+        if list_layers == []:
+            return _modeldict_max_element(m.state_dict())
+        else:
+            for param in m.state_dict().keys():
+                if param in list_layers:
+                    if m.state_dict()[param] is None: continue
+                    if m.state_dict()[param].dtype not in [torch.float, torch.float32, torch.float64]: continue
+                    temp = torch.max(m.state_dict()[param])
+                    if res < temp:
+                        res = temp
+            return res
 
 def _model_scale(m, s):
     op_with_graph = m.ingraph
@@ -310,6 +441,18 @@ def _modeldict_zeroslike(md):
         res[layer] = md[layer] - md[layer]
     return res
 
+def _modeldict_specificial_layer(md, list_layers):
+    res = {}
+    for layer in md.keys():
+        if md[layer] is None:
+            res[layer] = None
+            continue
+        if layer in list_layers:
+            res[layer] = md[layer]
+        else:
+            res[layer] = md[layer] * 0
+    return res
+
 def _modeldict_add(md1, md2):
     res = {}
     for layer in md1.keys():
@@ -337,6 +480,19 @@ def _modeldict_sub(md1, md2):
         res[layer] = md1[layer] - md2[layer]
     return res
 
+def _modeldict_elementwise_divide(md1, md2):
+    res = {}
+    for layer in md1.keys():
+        if md1[layer] is None:
+            res[layer] = None
+            continue
+        res[layer] = torch.div(md1[layer], md2[layer])
+        res[layer] = torch.nan_to_num(res[layer], nan = 0.0, posinf = 1.0, neginf = -1.0)
+    return res
+
+def _modeldict_elementwise_multiply(md1, md2):
+    pass
+
 def _modeldict_norm(md, p=2):
     res = torch.tensor(0.).to(md[list(md)[0]].device)
     for layer in md.keys():
@@ -344,6 +500,32 @@ def _modeldict_norm(md, p=2):
         if md[layer].dtype not in [torch.float, torch.float32, torch.float64]: continue
         res += torch.sum(torch.pow(md[layer], p))
     return torch.pow(res, 1.0/p)
+
+def _modeldict_sum_param(md):
+    res = torch.tensor(0.).to(md[list(md)[0]].device)
+    for layer in md.keys():
+        if md[layer] is None: continue
+        if md[layer].dtype not in [torch.float, torch.float32, torch.float64]: continue
+        res += torch.sum(md[layer])
+    return res
+
+def _modeldict_max_element(md):
+    maxe = float("-Inf")
+    for layer in md.keys():
+        if md[layer] is None: continue
+        if md[layer].dtype not in [torch.float, torch.float32, torch.float64]: continue
+        temp = torch.max(md[layer])
+        if maxe < temp:
+            maxe = temp
+    return maxe
+
+def _modeldict_numel(md):
+    res = torch.tensor(0).to(md[list(md)[0]].device)
+    for layer in md.keys():
+        if md[layer] is None: continue
+        if md[layer].dtype not in [torch.float, torch.float32, torch.float64]: continue
+        res += torch.numel(md[layer])
+    return res
 
 def _modeldict_to_tensor1D(md):
     res = torch.Tensor().type_as(md[list(md)[0]]).to(md[list(md)[0]].device)
@@ -398,3 +580,55 @@ def _modeldict_print(md, only_requires_grad = False):
             continue
         print("{}:{}".format(layer, md[layer]))
 
+## Apply Gaussian Distribution to model
+def _model_to_Gaussian(m1, mean, std):
+    op_with_graph = m1.ingraph
+    res = Model().to(m1.get_device())
+    if op_with_graph:
+        res.op_with_graph()
+        ml1 = get_module_from_model(m1)
+        mlr = get_module_from_model(res)
+        for n1, nr in zip(ml1, mlr):
+            rd = _modeldict_to_Gaussian(n1._parameters, mean, std, m1.get_device())
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_to_Gaussian(m1.state_dict(), mean, std, m1.get_device()))
+    return res
+
+def _modeldict_to_Gaussian(md1, mean, std, device):
+    res = {}
+    for layer in md1.keys():
+        if md1[layer] is None:
+            res[layer] = None
+            continue
+        norm_part = torch.normal(mean, std, md1[layer].shape).to(device)
+        res[layer] = md1[layer] + norm_part
+    return res
+
+def _create_new_model(md):
+    res = Model().to(md.get_device())
+    return res
+
+def _model_to_cpu(md):
+    pass
+
+def _model_to_gpu(md, device):
+    pass
+
+def _get_numel(md):
+    pass
+
+def multi_layer_by_alpha(model, alphas):
+    res = Model().to(model.get_device())
+    def _modeldict_multiply_alpha(model, alphas):
+        res = {}
+        for i, layer in enumerate(model.keys()):
+            if model[layer] is None:
+                res[layer] = None
+                continue
+            res[layer] = model[layer] * alphas[i]
+        return res
+    _modeldict_cp(res.state_dict(), _modeldict_multiply_alpha(model.state_dict(), alphas))
+    return res

@@ -9,11 +9,24 @@ class Model(FModule):
         self.conv2 = nn.Conv2d(in_channels=32, out_channels=64, kernel_size=5, padding=2)
         self.fc1 = nn.Linear(3136, 512)
         self.fc2 = nn.Linear(512, 10)
+        # them fc3
+        # self.fc3 = nn.Linear(6272, 10)
+        # self.fc4 = nn.Linear(512, 10)
+        # self.fc5 = nn.Linear(3136, 10)
 
     def forward(self, x):
         x = self.encoder(x)
         x = self.decoder(x)
         return x
+    # def forward(self, x):
+    #     x = x.view((x.shape[0],28,28))
+    #     x = x.unsqueeze(1)
+    #     x = F.max_pool2d(F.relu(self.conv1(x)), 2)
+    #     # x = F.max_pool2d(F.relu(self.conv2(x)), 2)
+    #     x = x.view(-1, x.shape[1]*x.shape[2]*x.shape[3])
+    #     x = F.relu(x)
+    #     x = self.fc3(x)
+    #     return x
 
     def encoder(self, x):
         x = x.view((x.shape[0],28,28))

@@ -1,0 +1,1 @@
+CUDA_VISIBLE_DEVICES=1 python main.py --task mnist_cnum100_dist2_skew0.5_seed0 --unlearn_algorithm 0 --proportion 0.3 --attacker_pct 0.2 --theta_delta 1 --gamma_epsilon 1 --model cnn --algorithm fedavg --aggregate weighted_com --num_rounds 200 --num_epochs 5 --learning_rate 0.001 --batch_size 10 --clean_model 0 --eval_interval 1

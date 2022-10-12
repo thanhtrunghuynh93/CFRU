@@ -24,10 +24,15 @@ import urllib
 import zipfile
 import os
 import ssl
+import copy
 from torch.utils.data import Dataset, DataLoader
 import torch
+from torch import nn
+import torch.nn.functional as F
 ssl._create_default_https_context = ssl._create_unverified_context
 import importlib
+from benchmark.uncertainty_loss import edl_mse_loss, mse_loss, loglikelihood_loss, kl_divergence, one_hot_embedding
+import torchvision.transforms as transforms
 
 def set_random_seed(seed=0):
     """Set random seed"""
@@ -155,6 +160,9 @@ class DefaultTaskGen(BasicTaskGen):
         print('Partitioning data...')
         local_datas = self.partition()
         train_cidxs, valid_cidxs = self.local_holdout(local_datas, rate=0.8, shuffle=True)
+        # Vu Viet Bach
+        self.train_cidxs = train_cidxs
+        self.valid_cidxs = valid_cidxs
         print('Done.')
         # save task infomation as .json file and the federated dataset
         print('-----------------------------------------------------')
@@ -385,14 +393,30 @@ class BasicTaskCalculator:
 class ClassifyCalculator(BasicTaskCalculator):
     def __init__(self, device):
         super(ClassifyCalculator, self).__init__(device)
+        self.num_classes = 10
         self.lossfunc = torch.nn.CrossEntropyLoss()
+        self.lossfunc_Dir = DirichletLoss(num_classes= self.num_classes, annealing_step= 10, device= device)
+        self.lossMSE = torch.nn.MSELoss()
         self.DataLoader = DataLoader
 
-    def get_loss(self, model, data, device=None):
+    def get_loss(self, model, data, epoch, device=None):
         tdata = self.data_to_device(data, device)
-        outputs = model(tdata[0])
+        outputs = model(tdata[0]) # batchsize * num_class
+        y = one_hot_embedding(tdata[1], self.num_classes)
         loss = self.lossfunc(outputs, tdata[1])
-        return loss
+        ## check nan
+        temp = copy.copy(loss)
+        if np.isnan(temp.cpu().detach().numpy()):
+            import pdb; pdb.set_trace()
+        # loss = self.lossMSE(outputs, tdata[1].float())
+        # loss = self.lossfunc_Dir(outputs, y.float(), epoch)
+        ## compute uncertainty
+        evidence = F.relu(outputs)
+        alpha = evidence + 1
+        # print(alpha)
+        u = self.num_classes / torch.sum(alpha, dim=1, keepdim=True)
+        unc = torch.sum(u)
+        return loss, unc
 
     @torch.no_grad()
     def get_evaluation(self, model, data):
@@ -419,10 +443,31 @@ class ClassifyCalculator(BasicTaskCalculator):
         else:
             return data[0].to(device), data[1].to(device)
 
-    def get_data_loader(self, dataset, batch_size=64, shuffle=True, droplast=False):
+    def get_data_loader(self, dataset, batch_size=64, shuffle=True, droplast=False): # shuffle = True
+        def seed_worker():
+            worker_seed = 0
+            numpy.random.seed(worker_seed)
+            random.seed(worker_seed)
+        g = torch.Generator()
+        g.manual_seed(0) # 0
         if self.DataLoader == None:
             raise NotImplementedError("DataLoader Not Found.")
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast)
+        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast, worker_init_fn=seed_worker, generator=g)
+        # if self.DataLoader == None:
+        #     raise NotImplementedError("DataLoader Not Found.")
+        # return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast)
+    
+## Bang Nguyen Trong
+## Evidential Deep Learning to Quantify Classification Uncertainty
+class DirichletLoss(nn.Module):
+    def __init__(self, num_classes, annealing_step, device):
+        super(DirichletLoss, self).__init__()
+        self.num_classes = num_classes
+        self.annealing_step = annealing_step
+        self.device = device
+        
+    def forward(self, output, target, epoch_num):
+        return edl_mse_loss(output, target, epoch_num, self.num_classes, self.annealing_step, self.device)
 
 class BasicTaskReader:
     def __init__(self, taskpath=''):
@@ -449,7 +494,16 @@ class XYTaskReader(BasicTaskReader):
         test_data = XYDataset(feddata['dtest']['x'], feddata['dtest']['y'])
         train_datas = [XYDataset(feddata[name]['dtrain']['x'], feddata[name]['dtrain']['y']) for name in feddata['client_names']]
         valid_datas = [XYDataset(feddata[name]['dvalid']['x'], feddata[name]['dvalid']['y']) for name in feddata['client_names']]
-        return train_datas, valid_datas, test_data, feddata['client_names']
+        
+        ## read attack data
+        with open(os.path.join(self.taskpath, 'attack.json'), 'r') as inf:
+            feddata = ujson.load(inf)
+        # test_data_attack = XYDataset(feddata['dtest']['x'], feddata['dtest']['y'])
+        backtask_data = XYDataset(feddata['dbackdoor']['x'], feddata['dbackdoor']['y'])
+        train_datas_attack = [XYDataset(feddata[name]['dtrain']['x'], feddata[name]['dtrain']['y']) for name in feddata['client_names']]
+        # valid_datas_attack = [XYDataset(feddata[name]['dvalid']['x'], feddata[name]['dvalid']['y']) for name in feddata['client_names']]
+        
+        return train_datas, train_datas_attack, valid_datas, test_data, backtask_data, feddata['client_names']
 
 class IDXTaskReader(BasicTaskReader):
     def __init__(self, taskpath=''):
@@ -481,6 +535,11 @@ class XYDataset(Dataset):
         """
         if not self._check_equal_length(X, Y):
             raise RuntimeError("Different length of Y with X.")
+        #"Vu Viet Bach modify XYDataset in benchmark/toolkits.py"
+        # Begin change
+        # force totensor equal true
+        totensor = True
+        # End change
         if totensor:
             try:
                 self.X = torch.tensor(X)
@@ -490,6 +549,13 @@ class XYDataset(Dataset):
         else:
             self.X = X
             self.Y = Y
+        # Begin change
+        # transform = transforms.Compose([
+        #     transforms.RandomHorizontalFlip(),
+        #     transforms.Normalize((0.1307, ), (0.3081,))]
+        # )
+        # self.X = transform(self.X)
+        # End change
         self.all_labels = list(set(self.tolist()[1]))
 
     def __len__(self):

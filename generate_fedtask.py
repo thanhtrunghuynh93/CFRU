@@ -13,6 +13,8 @@ def read_option():
 
 if __name__ == '__main__':
     option = read_option()
-    TaskGen = getattr(importlib.import_module('.'.join(['benchmark', option['dataset'], 'core'])), 'TaskGen')
-    generator = TaskGen(dist_id = option['dist'], skewness = option['skew'], num_clients=option['num_clients'])
+    # TaskGen = getattr(importlib.import_module('.'.join(['benchmark', option['dataset'], 'core'])), 'TaskGen')
+    CustomTaskGen = getattr(importlib.import_module('.'.join(['benchmark', option['dataset'], 'core'])), 'CustomTaskGen')
+    generator = CustomTaskGen(dist_id = option['dist'], skewness = option['skew'], num_clients=option['num_clients'])
     generator.run()
+    generator.get_dirty_data()

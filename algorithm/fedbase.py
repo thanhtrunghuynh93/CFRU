@@ -5,14 +5,16 @@ from multiprocessing import Pool as ThreadPool
 from main import logger
 import os
 import utils.fflow as flw
-
+import torch 
+import json
 class BasicServer():
-    def __init__(self, option, model, clients, test_data = None):
+    def __init__(self, option, model, clients, test_data = None, backtask_data = None):
         # basic setting
         self.task = option['task']
         self.name = option['algorithm']
         self.model = model
         self.test_data = test_data
+        self.test_backdoor = backtask_data
         self.eval_interval = option['eval_interval']
         self.num_threads = option['num_threads']
         # clients settings
@@ -37,18 +39,47 @@ class BasicServer():
         self.option = option
         # server calculator
         self.calculator = fmodule.TaskCalculator(fmodule.device)
+        # uncertainty of all clients
+        self.uncertainty_round = None
+        self.uncertainty_all_clients = [[] for cid in range(self.num_clients)]
+        self.round = 0
+        # unlearning parameters
+        self.lipschitz_constances = []
+        self.beta = []
+        self.grads_all_round = []
+        # self.grads = [[] for cid in range(self.num_clients)]
+        # self.numel = np.sqrt(1663370) # sqrt(number of parameters in Model())
+        
+        # test with fixed attack_clients
+        self.all_attack_clients_id = [] 
+        
+        # round selected of all clients
+        self.round_selected = [[] for cid in range(self.num_clients)]
+        
+        ##
+        self.attcker_pct = self.option['attacker_pct']
+        self.theta = self.option['theta_delta']
+        self.gamma = self.option['gamma_epsilon']
+        self.algo = self.option['unlearn_algorithm']
+        with open('fedtask/mnist_cnum100_dist2_skew0.5_seed0/record/fedavg_Mcnn_R750_B32_P0.30_AP0.20_TD1.00_GE1.00_ALG0.json', 'r') as f:
+            data = json.load(f)
+            self.fixed_selected_clients = data['all_selected_clients']
+        
+        ## secret attackers
 
     def run(self):
         """
         Start the federated learning symtem where the global model is trained iteratively.
         """
         logger.time_start('Total Time Cost')
+        
+        ## run()
         for round in range(self.num_rounds+1):
             print("--------------Round {}--------------".format(round))
             logger.time_start('Time Cost')
-
+            self.round = round ## Get round_num
             # federated train
-            self.iterate(round)
+            self.uncertainty_round = self.iterate(round)
             # decay learning rate
             self.global_lr_scheduler(round)
 
@@ -67,16 +98,228 @@ class BasicServer():
         :param
             t: the number of current round
         """
+        # import pdb; pdb.set_trace()
+        
         # sample clients: MD sampling as default but with replacement=False
-        self.selected_clients = self.sample()
+        self.selected_clients = self.sample(t)
+        for idx in self.selected_clients:
+            self.round_selected[idx].append(t)
+        
         # training
-        models, train_losses = self.communicate(self.selected_clients)
-        # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
-        if not self.selected_clients: return
-        # aggregate: pk = 1/K as default where K=len(selected_clients)
-        self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
-        return
+        models, train_losses, uncertainty_round = self.communicate(self.selected_clients)
+        
+        # save all models and uncertainties to disk
+        # self.save_models(t, models, uncertainty_round)
+        if t > 90:
+            import pdb; pdb.set_trace() 
+        ##  Process Unlearning
+        ### update uncertainty for clients
+        self.update_uncertainty(uncertainty_round)
+        ### update grad of received from clients
+        print((self.model-models[0]).state_dict()['fc2.weight'][9])
+        ## pdb.set_trace = lambda: 1
 
+        ## start algorithm
+        if self.algo == 0: 
+            # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+            if not self.selected_clients: return
+            # aggregate: pk = 1/K as default where K=len(selected_clients)
+            self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
+        elif self.algo == 1:
+            # find attack_clients
+            p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients]
+            attack_clients = self.check_atk()
+            if len(attack_clients) >= 1:
+                models, p = self.update_models(attack_clients, models)
+            # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+            if not self.selected_clients: return
+            # aggregate: pk = 1/K as default where K=len(selected_clients)
+            self.model = self.aggregate(models, p)
+        elif self.algo == 2:
+            # save grads
+            self.process_grad(models, t)
+            # find attack_clients
+            attack_clients = self.check_atk()
+            # compute lipschitz constraint at this round
+            self.lipschitz_constances.append(self.compute_lipschitz())
+            # compute beta for this round
+            self.update_beta()
+            # # unlearning 
+            # print(2)
+            p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients]
+            if len(attack_clients) >= 1:
+                # self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
+                round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
+                # update selected clients
+                models, p = self.update_models(attack_clients, models)
+                # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+                if not self.selected_clients: return
+                # aggregate: pk = 1/K as default where K=len(selected_clients)
+                self.model = self.aggregate(models, p)
+                
+                # unlearn
+                self.unlearning_algo2(attack_clients, round_attack, attackers_round, t)
+            else:
+                # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+                if not self.selected_clients: return
+                # aggregate: pk = 1/K as default where K=len(selected_clients)
+                self.model = self.aggregate(models, p)
+        else:
+            # algorithm 3 
+            # save grads
+            self.process_grad(models, t)
+            # find attack_clients
+            attack_clients = self.check_atk()
+            # compute lipschitz constraint at this round
+            self.lipschitz_constances.append(self.compute_lipschitz())
+            # compute beta for this round
+            self.update_beta()
+            # # unlearning 
+            p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients]
+            if len(attack_clients) >= 1:
+                # self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
+                round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
+                # update selected clients
+                models, p = self.update_models(attack_clients, models)
+                # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+                if not self.selected_clients: return
+                # aggregate: pk = 1/K as default where K=len(selected_clients)
+                self.model = self.aggregate(models, p)
+
+                # unlearn 
+                self.unlearning(attack_clients, round_attack, attackers_round, t)
+            else:
+                # check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
+                if not self.selected_clients: return
+                # aggregate: pk = 1/K as default where K=len(selected_clients)
+                self.model = self.aggregate(models, p)
+
+        ## end algorithm
+        
+        return uncertainty_round
+
+    def save_models(self, round_num, models, uncertainty_round):
+        pass
+
+    def update_uncertainty(self, uncertainty_round):
+        for idx in range(len(self.selected_clients)):
+            self.uncertainty_all_clients[self.selected_clients[idx]].append(uncertainty_round[idx])
+    
+    def process_grad(self, models, round_id):
+        ## self.model : global model before update
+        ## models[cid] : model of client cid at round t
+        
+        ## grad save as dict: {'cid' : grad}
+        grads_this_round = {}
+            
+        for idx in range(len(self.selected_clients)):
+            cid = self.selected_clients[idx]
+            grads_this_round[str(cid)] = (self.model - models[idx]).cpu()
+            # grads_this_round[str(cid)] = fmodule._model_to_cpu(self.model - models[idx])
+        
+        self.grads_all_round.append(grads_this_round)
+        ## Vu Viet Bach
+        # save_dict = {}
+        # save_dict['selected_clients'] = self.selected_clients
+        # save_dict['grad'] = {}
+        # for idx in range(len(self.selected_clients)):
+        #     del models[idx]
+        #     cid = self.selected_clients[idx]
+        #     save_dict['grad'][cid] = self.grads[cid]
+        # torch.save(save_dict, f'grad_store/{round_id}.pt')
+            
+    def update_beta(self):
+        sum_vol = 0.0
+        for cid in self.selected_clients:
+            sum_vol += 1.0 * self.client_vols[cid]/self.data_vol
+        self.beta.append(sum_vol)
+        
+    def compute_lipschitz(self):
+        return 1.0 * fmodule._model_norm(self.model) # / self.numel
+    
+    def check_atk(self):
+        atk_clients = []
+        for cid in self.selected_clients:
+            if len(self.uncertainty_all_clients[cid]) >= 2: # >= 2
+                if self.uncertainty_all_clients[cid][-1] > self.uncertainty_all_clients[cid][-2] + 0.05:
+                    atk_clients.append(cid)
+        return atk_clients
+    
+    def getAttacker_rounds(self, attackers):
+        ## get list of attacked rounds
+        round_attack = set([])
+        for cid in attackers:
+            round_attack.update(self.round_selected[cid])
+        round_attack = list(round_attack)
+        round_attack.sort()
+        
+        ## get list of attackers of each round 
+        attackers_round = [[] for round in range(len(round_attack))]
+        for idx in range(len(round_attack)):
+            for cid in attackers:
+                if round_attack[idx] in self.round_selected[cid]:
+                    attackers_round[idx].append(cid)
+    
+        return round_attack, attackers_round
+        
+    def unlearning(self, atk_clients, round_attack, attackers_round, round):
+        # compute lipschitz constant by average over all rounds
+        alpha = 1.0 * self.gamma * sum(self.lipschitz_constances) / (round + 1)
+        print("Alpha: {}".format(alpha))
+        # compute beta constraint in lipschitz inequality
+        list_beta = []
+        for idx in range(len(self.beta)): # idx: round_id
+            beta = self.beta[idx]
+            if idx in round_attack:
+                for cid in attackers_round[round_attack.index(idx)]:
+                    beta -= 1.0 * self.client_vols[cid]/self.data_vol
+                
+            beta = beta * alpha + 1
+            list_beta.append(beta)
+           
+        # compute unlearning-term
+        unlearning_term = fmodule._create_new_model(self.model) * 0.0
+        for idx in range(len(round_attack) - 1):
+            round_id = round_attack[idx]
+            # compute u-term at round round_id (attack round)
+            unlearning_term = unlearning_term * list_beta[round_id]
+            for c_id in attackers_round[idx]:
+                unlearning_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[round_id][str(c_id)].to(self.model.get_device())
+                self.grads_all_round[round_id][str(c_id)].cpu()
+                #fmodule._model_to_gpu(self.grads_all_round[round_id][str(c_id)], device= self.model.get_device())
+            
+            for r_id in range(round_id + 1, round_attack[idx + 1]):
+                unlearning_term = unlearning_term * list_beta[r_id]
+        
+        # theta multiply with beta at round t
+        beta_theta = self.theta * list_beta[-1]
+        #
+        unlearning_term = unlearning_term * beta_theta
+        # unlearning_term = fmodule._model_specificial_layers(unlearning_term, list_layers = ['fc2.weight', 'fc2.bias'])
+        self.model = self.model + unlearning_term
+        # self.model = fmodule._model_to_Gaussian(self.model + unlearning_term, 0, 1.0 * fmodule._model_norm(unlearning_term) / self.numel)
+        self.remove_atk(atk_clients)
+    
+    def unlearning_algo2(self, atk_clients, round_attack, attackers_round, round):   
+        # compute unlearning-term
+        unlearning_term = fmodule._create_new_model(self.model) * 0.0
+        for idx in range(len(round_attack) - 1):
+            round_id = round_attack[idx]
+            # compute u-term at round round_id (attack round)
+            for c_id in attackers_round[idx]:
+                unlearning_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[round_id][str(c_id)].to(self.model.get_device())
+                self.grads_all_round[round_id][str(c_id)].cpu()
+        
+        unlearning_term = unlearning_term * self.theta
+        # unlearning_term = fmodule._model_specificial_layers(unlearning_term, list_layers = ['fc2.weight', 'fc2.bias'])
+        self.model = self.model + unlearning_term
+        # self.model = fmodule._model_to_Gaussian(self.model + unlearning_term, 0, 1.0 * fmodule._model_norm(unlearning_term) / self.numel)
+        self.remove_atk(atk_clients)
+        
+    def remove_atk(self, attackers):
+        for cid in attackers:
+            self.round_selected[cid] = []
+    
     def communicate(self, selected_clients):
         """
         The whole simulating communication procedure with the selected clients.
@@ -128,6 +371,7 @@ class BasicServer():
         """
         return {
             "model" : copy.deepcopy(self.model),
+            "round" : self.round,
         }
 
     def unpack(self, packages_received_from_clients):
@@ -141,7 +385,8 @@ class BasicServer():
         """
         models = [cp["model"] for cp in packages_received_from_clients]
         train_losses = [cp["train_loss"] for cp in packages_received_from_clients]
-        return models, train_losses
+        train_uncertainties = [cp["train_uncertainty"] for cp in packages_received_from_clients]
+        return models, train_losses, train_uncertainties
 
     def global_lr_scheduler(self, current_round):
         """
@@ -162,33 +407,51 @@ class BasicServer():
             for c in self.clients:
                 c.set_learning_rate(self.lr)
 
-    def sample(self):
+    def sample(self, t):
         """Sample the clients.
         :param
             replacement: sample with replacement or not
         :return
             a list of the ids of the selected clients
         """
-        all_clients = [cid for cid in range(self.num_clients)]
-        selected_clients = []
-        # collect all the active clients at this round and wait for at least one client is active and
-        active_clients = []
-        while(len(active_clients)<1):
-            active_clients = [cid for cid in range(self.num_clients) if self.clients[cid].is_active()]
-        # sample clients
-        if self.sample_option == 'active':
-            # select all the active clients without sampling
-            selected_clients = active_clients
-        if self.sample_option == 'uniform':
-            # original sample proposed by fedavg
-            selected_clients = list(np.random.choice(all_clients, self.clients_per_round, replace=False))
-        elif self.sample_option =='md':
-            # the default setting that is introduced by FedProx
-            selected_clients = list(np.random.choice(all_clients, self.clients_per_round, replace=True, p=[nk / self.data_vol for nk in self.client_vols]))
-        # drop the selected but inactive clients
-        selected_clients = list(set(active_clients).intersection(selected_clients))
+        # # remove all attack clients
+        # all_clients = [cid for cid in range(self.num_clients)]
+        # selected_clients = []
+        # # collect all the active clients at this round and wait for at least one client is active and
+        # active_clients = []
+        # while(len(active_clients)<1):
+        #     active_clients = [cid for cid in range(self.num_clients) if self.clients[cid].is_active()]
+        # # sample clients
+        # if self.sample_option == 'active':
+        #     # select all the active clients without sampling
+        #     selected_clients = active_clients
+        # if self.sample_option == 'uniform':
+        #     # original sample proposed by fedavg
+        #     selected_clients = list(np.random.choice(all_clients, self.clients_per_round, replace=False))
+        # elif self.sample_option =='md':
+        #     # the default setting that is introduced by FedProx
+        #     selected_clients = list(np.random.choice(all_clients, self.clients_per_round, replace=True, p=[nk / self.data_vol for nk in self.client_vols]))
+        # # drop the selected but inactive clients
+        # selected_clients = list(set(active_clients).intersection(selected_clients))
+
+        # selected_clients = []
+        # for cid in self.fixed_selected_clients[t]:
+        #     if cid not in self.option['attacker']:
+        #         selected_clients.append(cid)
+                
+        selected_clients = self.fixed_selected_clients[t]
+        # selected_clients = [23, 96, 2, 3, 69, 67, 31, 48, 76, 58, 73, 10, 94, 64, 75, 32, 49, 70, 21, 34, 25, 50, 20, 74, 63, 98, 17, 60, 85, 36]
         return selected_clients
 
+    def update_models(self, atk_clients, models):
+        mds = []
+        p = []
+        for model, cid in zip(models, self.selected_clients):
+            if cid not in atk_clients:
+                mds.append(model)
+                p.append(1.0 * self.client_vols[cid]/self.data_vol)
+        return mds, p
+        
     def aggregate(self, models, p=[]):
         """
         Aggregate the locally improved models.
@@ -204,7 +467,7 @@ class BasicServer():
         -------------------------------------------------------------------------------------------------------------------------
          weighted_scale                 |uniform (default)          |weighted_com (original fedavg)   |other
         ==============================================================================================|============================
-        N/K * Σpk * model_k                 |1/K * Σmodel_k                  |(1-Σpk) * w_old + Σpk * model_k     |Σ(pk/Σpk) * model_k
+        N/K * Σpk * model_k             |1/K * Σmodel_k             |(1-Σpk) * w_old + Σpk * model_k  |Σ(pk/Σpk) * model_k
         """
         if not models: 
             return self.model
@@ -259,9 +522,22 @@ class BasicServer():
                 eval_metric += bmean_eval_metric * len(batch_data[1])
             eval_metric /= len(self.test_data)
             loss /= len(self.test_data)
-            return eval_metric, loss
+            
+            ## test on backdoor data
+            eval_backdoor = -1
+            if self.test_backdoor:
+                eval_backdoor = 0
+                model.eval()
+                backdoor_loader = self.calculator.get_data_loader(self.test_backdoor, batch_size = 10)
+                for batch_id, batch_data in enumerate(backdoor_loader):
+                    backdoor_eval_metric, backdoor_loss = self.calculator.test(model, batch_data)
+                    eval_backdoor += backdoor_eval_metric * len(batch_data[1])
+                eval_backdoor /= len(self.test_backdoor)
+            
+            # return 
+            return eval_metric, loss, eval_backdoor
         else: 
-            return -1,-1
+            return -1, -1, -1
 
 class BasicClient():
     def __init__(self, option, name='', train_data=None, valid_data=None):
@@ -286,23 +562,31 @@ class BasicClient():
         self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
         self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-    def train(self, model):
+    def train(self, model, round_num):
         """
         Standard local training procedure. Train the transmitted model with local training dataset.
         :param
             model: the global model
+            round_num: 
         :return
         """
+        # import pdb; pdb.set_trace()
         model.train()
+    
+        print(len(self.train_data))
         data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
+        
         optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
         for iter in range(self.epochs):
+            uncertainty = 0.0
             for batch_id, batch_data in enumerate(data_loader):
                 model.zero_grad()
-                loss = self.calculator.get_loss(model, batch_data)
+                loss, unc = self.calculator.get_loss(model, batch_data, iter)
                 loss.backward()
-                optimizer.step()
-        return
+                optimizer.step() 
+                uncertainty += unc.cpu().detach().numpy() 
+            uncertainty = uncertainty / len(data_loader.dataset) 
+        return uncertainty
 
     def test(self, model, dataflag='valid'):
         """
@@ -336,7 +620,7 @@ class BasicClient():
             the unpacked information that can be rewritten
         """
         # unpack the received package
-        return received_pkg['model']
+        return received_pkg['model'], received_pkg['round']
 
     def reply(self, svr_pkg):
         """
@@ -351,13 +635,15 @@ class BasicClient():
         :return:
             client_pkg: the package to be send to the server
         """
-        model = self.unpack(svr_pkg)
+        model = self.unpack(svr_pkg)[0]
+        round_num = self.unpack(svr_pkg)[1]
+        
         loss = self.train_loss(model)
-        self.train(model)
-        cpkg = self.pack(model, loss)
+        uncertainty = self.train(model, round_num)
+        cpkg = self.pack(model, loss, uncertainty)
         return cpkg
 
-    def pack(self, model, loss):
+    def pack(self, model, loss, uncertainty):
         """
         Packing the package to be send to the server. The operations of compression
         of encryption of the package should be done here.
@@ -370,6 +656,7 @@ class BasicClient():
         return {
             "model" : model,
             "train_loss": loss,
+            "train_uncertainty": uncertainty
         }
 
     def is_active(self):
