@@ -3,7 +3,24 @@ import numpy as np
 import torch
 import os
 import multiprocessing
-
+import json
+import torch
+import pickle
+import os
+import matplotlib.pyplot as plt
+os.environ['CUDA_VISIBLE_DEVICES'] = "1,0"
+import utils.fmodule
+from utils import fmodule
+from utils.fmodule import _modeldict_cp
+import importlib
+import utils.fflow as flw
+# from eval.evaluate_utils import subtract_weight
+import numpy as np
+import random
+# from eval.evaluate_utils import *
+from torch.utils.data import Dataset, DataLoader
+from test_saved_models import NumpyEncoder, CPU_Unpickler
+from offline_unlearn import compute_alpha_cutoff
 class MyLogger(flw.Logger):
     def log(self, server=None):
         if server==None: return
@@ -84,9 +101,79 @@ def main():
                     print(server.round_selected)
                     del server
 
-if __name__ == '__main__':
-    main()
+def plot_alpha_cutoff(cutoff, round = 200, layer = 'fc2.weight'):
+    input_path = os.path.join('./result','alpha_cutoff', 'round{}'.format(round), layer, 'cutoff{}.json'.format(cutoff))
+    output_path = os.path.join('./result','alpha_cutoff', 'round{}'.format(round), layer, 'plot')
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+        
+    with open(input_path, 'r') as f:
+        data = json.load(f)
+    x0 = data['alpha_cutoff']
+    x = []
+    for i in range(round):
+        sum = 0
+        for client in range(6, 30):
+            sum += x0[client][i]
+        x.append(sum/24)
+    # import pdb; pdb.set_trace()
+    # x = data['alpha_cutoff'][9][5:]
+    plt.plot(x, label="alpha over rounds - cut 5%")
+    plt.xlabel('round')
+    plt.ylabel('alpha')
+    plt.legend()
+    plt.savefig(os.path.join(output_path, 'avg_alpha_p.png'))
+    # print(x[100])
+    # # print(x[200])
+    plt.close()
+    import pdb; pdb.set_trace()
+    
+def plot_track():
+    output_path = os.path.join('./result','unlearn_track', 'round100', 'plot')
+    if not os.path.exists(output_path):
+        os.makedirs(output_path)
+    
+    for alp in [0.01, 0.03, 0.05, 0.07, 0.09, 0.1, 0.2]:
+        input_path = os.path.join('./result','unlearn_track', 'round100', 'alpha{}.json'.format(alp))
+        with open(input_path, 'r') as f:
+            data = json.load(f)
+        x = data['backdoor']
 
+        # import pdb; pdb.set_trace()
+        # x = data['alpha_cutoff'][9][5:]
+        plt.plot(x, label="backdoor accuracy-alpha{}".format(alp))
+        plt.legend()
+    plt.xlabel('round')
+    plt.ylabel('accuracy')
+    plt.savefig(os.path.join(output_path, 'backdoor_acc.png'))
+    # print(x[100])
+    # # print(x[200])
+    plt.close()
+    # import pdb; pdb.set_trace()
+    
+
+if __name__ == '__main__':
+    task_name = 'mnist_cnum100_dist2_skew0.5_seed0'
+    task_model = 'cnn'
+    bmk_name = task_name[:task_name.find('cnum')-1].lower()
+    bmk_model_path = '.'.join(['benchmark', bmk_name, 'model', task_model])
+    bmk_core_path = '.'.join(['benchmark', bmk_name, 'core'])
+    # utils.fmodule.device = torch.device('cuda:{}'.format(option['server_gpu_id']) if torch.cuda.is_available() and option['server_gpu_id'] != -1 else 'cpu')
+    utils.fmodule.Model = getattr(importlib.import_module(bmk_model_path), 'Model')
+    device = 'cpu'
+    # plot_params_alpha('./result', device, 99, 'fc2.weight')
+    # print(compute_alpha_over_rounds('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0', max_iters=10, list_layers= ['fc2.weight']))
+    # offline_track('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0', alp = 0.01)
+    # compute_alpha_cutoff('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0', max_iters=10)
+    ##########
+    # my_mod = utils.fmodule.Model()
+    # # print(len(np.array(torch.flatten(my_mod.state_dict()['fc2.weight']))))
+    # for layer in ['conv1.weight', 'conv2.weight', 'fc1.weight', 'fc2.weight']:
+    #     my_len = len(np.array(torch.flatten(my_mod.state_dict()[layer])))
+    #     for cutoff in [int(my_len*0.025), int(my_len*0.05), 0, 1, 2, 3, 4, 5, 10]:
+    #         compute_alpha_cutoff('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0', max_iters=200, cutoff=cutoff, layer=layer)
+    ###
+    plot_track()
 
 
 

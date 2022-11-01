@@ -7,7 +7,7 @@ class Server(BasicServer):
     def __init__(self, option, model, clients, test_data = None, backtask_data = None):
         super(Server, self).__init__(option, model, clients, test_data, backtask_data)
         self.path_save = os.path.join('fedtasksave', self.option['task'],
-                                    "R{}_P{:.2f}_AP{:.2f}_Alpha1.0_3atk_minus{}".format(
+                                    "R{}_P{:.2f}_AP{:.2f}_Alpha1.0_6atk_minus{}".format(
                                         option['num_rounds'],
                                         option['proportion'],
                                         option['attacker_pct'],
@@ -30,12 +30,15 @@ class Server(BasicServer):
         # model clean with algo3
         clean_model = temp_model + self.unlearn_term_algo3
         test_metric3, test_loss3, test_backdoor3 = self.test(model= clean_model)
+        ## clean metric 
+        # test_clean, _, test_backdoor = self.test(model= temp_model)
         # log
         save_logs = {
             "selected_clients": self.selected_clients,
             "models": models,
             "p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
             "server_model": self.model,
+            # "accuracy": [test_clean, test_backdoor]
             "unlearn_term_algo2": self.unlearn_term_algo2,
             "unlearn_term_algo3": self.unlearn_term_algo3,
             "uncertainty_round": uncertainty_round,

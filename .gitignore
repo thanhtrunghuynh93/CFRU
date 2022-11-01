@@ -11,3 +11,5 @@
 .vscode*
 /utils/figures/
 *.txt
+*.npz
+*.sh

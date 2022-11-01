@@ -128,7 +128,7 @@ def initialize(option):
         s_atk = [52, 99, 0, 15, 20]
     else:
         None
-    s_atk = [0, 1, 2]
+    s_atk = [0, 1, 2, 3, 4, 5]
     option['attacker'] = s_atk
     
     # import pdb; pdb.set_trace()

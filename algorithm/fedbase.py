@@ -61,9 +61,10 @@ class BasicServer():
         self.theta = self.option['theta_delta']
         self.gamma = self.option['gamma_epsilon']
         self.algo = self.option['unlearn_algorithm']
-        with open('fedtask/mnist_cnum100_dist2_skew0.5_seed0/record/fedavg_Mcnn_R750_B32_P0.30_AP0.20_TD1.00_GE1.00_ALG0.json', 'r') as f:
-            data = json.load(f)
-            self.fixed_selected_clients = data['all_selected_clients']
+        self.fixed_selected_clients = [[] for i in range(self.num_rounds+1)]
+        # with open('fedtask/mnist_cnum100_dist2_skew0.5_seed0/record/fedavg_Mcnn_R750_B32_P0.30_AP0.20_TD1.00_GE1.00_ALG0.json', 'r') as f:
+        #     data = json.load(f)
+        #     self.fixed_selected_clients = data['all_selected_clients']
         
         ## secret attackers
 

@@ -418,7 +418,7 @@ def plot_unlearn_term(log_folder, dirty_name, clean_name, max_iters, output_file
     plt.savefig(os.path.join(output_path, "{}.png".format(output_file)))
     plt.close()
 
-def plot_accuracy(log_folder, dirty_name, max_iters, output_file):
+def plot_accuracy(log_folder, dirty_name, max_iters, main_acc, output_file):
     output_path = os.path.join(log_folder, 'fig', 'accuracy', 'acc-alpha_gen_law')
     if not os.path.exists(output_path):
         os.makedirs(output_path)
@@ -433,6 +433,7 @@ def plot_accuracy(log_folder, dirty_name, max_iters, output_file):
     
     plt.plot(unlearn2_acc, label= "{}-acc-unlearn2".format(output_file))
     plt.plot(unlearn3_acc, label= "{}-acc-unlearn3".format(output_file))
+    plt.plot(main_acc, label= "{}-acc-w".format(output_file))
     plt.legend()
     plt.xlabel('round')
     plt.ylabel('accuracy')
@@ -492,9 +493,9 @@ if __name__ == '__main__':
             # os.system('bash run_experiments.sh')
             # save figure
     alpha = 1.0
-    rid = 2
-    atk = 3
-    alp = 1.0
+    rid = 100
+    atk = 6
+    alp = 0.05
     lay = 'fc2.bias'
     # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/check_nan_model/record/model2.pkl'.format(rid), 'rb') as test_f:
     #     hist = CPU_Unpickler(test_f).load()
@@ -502,13 +503,21 @@ if __name__ == '__main__':
     # model_nan = hist['model']
     # import pdb; pdb.set_trace()
     # print(model_nan(xzero))
-    for alp in [0.1, 0.2]:
-        with open("run_experiments.sh", "w") as file:
-            file.write(f"CUDA_VISIBLE_DEVICES=1 python main.py --task mnist_cnum100_dist2_skew0.5_seed0 --unlearn_algorithm 0 --proportion 0.3 --attacker_pct 0.2 --theta_delta 1 --gamma_epsilon {alp} --model cnn --algorithm fedavg --aggregate weighted_com --num_rounds 200 --num_epochs 5 --learning_rate 0.001 --batch_size 10 --clean_model 0 --eval_interval 1\n")
-        # bash run_experiments.sh
-        os.system('bash run_experiments.sh')
+    # for alp in [0.05, 0.09]:
+    #     with open("run_experiments.sh", "w") as file:
+    #         file.write(f"CUDA_VISIBLE_DEVICES=0 python main.py --task mnist_cnum100_dist2_skew0.5_seed0 --unlearn_algorithm 0 --proportion 0.3 --attacker_pct 0.2 --theta_delta 1 --gamma_epsilon {alp} --model cnn --algorithm fedavg --aggregate weighted_com --num_rounds 100 --num_epochs 5 --learning_rate 0.001 --batch_size 10 --clean_model 0 --eval_interval 1\n")
+    #     # bash run_experiments.sh
+    #     os.system('bash run_experiments.sh')
     # plot_unlearn_term('./result', 'R2_P0.30_AP0.20_Alpha1.0_{}atk_minus{}'.format(atk, alp), 'R100_P0.30_AP0.20_Alpha0.0_{}atk'.format(atk), rid, lay + "-{}atker_minus{}".format(atk, alp), layer=lay)
-    # plot_accuracy('./result', 'R100_P0.30_AP0.20_AlphaGen_{}atk_minus{}'.format(atk, alp), rid, "{}atker_test_minus{}".format(atk, alp))
+    # main_acc = [0.0972, 0.1145, 0.1225, 0.1135, 0.1135, 0.1135, 0.1733, 0.1135, 0.1783, 0.192, 0.1419, 0.2551, 0.281, 0.4246, 0.5188, 0.598, 0.3902, 0.5164, 0.5993, 0.5083, 0.607, 0.5133, 0.617, 0.5276, 0.5926, 0.6318, 0.5707, 0.6573, 0.7187, 0.6084, 0.6768, 0.7117, 0.7278, 0.7439, 0.7615, 0.777, 0.792, 0.8029, 0.8109, 0.8175, 0.8248, 0.7815, 0.811, 0.8284, 0.8382, 0.8428, 0.8495, 0.8539, 0.7034, 0.7655, 0.8077, 0.8325, 0.8496, 0.8605, 0.8669, 0.8713, 0.8734, 0.8758, 0.8759, 0.8761, 0.8781, 0.8787, 0.8804, 0.8823, 0.8846, 0.8884, 0.8901, 0.8932, 0.8949, 0.8968, 0.8987, 0.8992, 0.9003, 0.9008, 0.9013, 0.9021, 0.9039, 0.9044, 0.9065, 0.9075, 0.908, 0.8227, 0.8506, 0.8713, 0.8858, 0.8963, 0.9032, 0.9077, 0.9115, 0.9134, 0.9152, 0.917, 0.9183, 0.9193, 0.9194, 0.9201, 0.9209, 0.9209, 0.9213, 0.9216, 0.9222, 0.9229, 0.9234, 0.9236, 0.9239, 0.9247, 0.9252, 0.9254, 0.926, 0.926, 0.926, 0.9263, 0.9267, 0.9271, 0.9274, 0.9275, 0.9279,0.9284, 0.9287, 0.9289, 0.9293, 0.9295, 0.93, 0.9304, 0.9309, 0.9314, 0.9318, 0.9323, 0.9326, 0.9329, 0.9331, 0.9335, 0.9339, 0.934, 0.9341, 0.9343, 0.935, 0.9352, 0.9357, 0.9358, 0.9364, 0.9365, 0.9365, 0.9368, 0.9369, 0.9369, 0.9372, 0.9373, 0.9373, 0.9374, 0.9376, 0.9383, 0.9384, 0.9387, 0.9391, 0.9392,0.9394, 0.9394, 0.9395, 0.9396, 0.9398, 0.9401, 0.9402, 0.9402, 0.9405, 0.9408, 0.9408, 0.9411, 0.9414, 0.9417, 0.9417, 0.9425, 0.9433, 0.8842, 0.9102, 0.8226, 0.861, 0.8863, 0.904, 0.9173, 0.9266, 0.9326, 0.9367, 0.9398, 0.9422, 0.9433, 0.9445, 0.9445, 0.9453, 0.946, 0.9468, 0.9474, 0.9479, 0.9484, 0.9487, 0.9493, 0.9495, 0.9503, 0.9506, 0.9509, 0.9513]
+    # main_acc = [0.1145,0.1245,0.1372,0.1137,0.1449,0.1137,0.1722,0.1161,0.1669,0.1927,0.3435,0.3327,0.2506,0.3975,0.5234,0.6069,0.6615,0.4618,0.5706,0.4747,0.5896,0.6561,0.6921,0.5951,0.6305,0.6665,0.5757,0.6436,0.69,0.7255,0.623,0.6854,0.7162,0.7343,0.7503,0.7682,0.784,0.797,0.6311,0.7125,0.7649,0.7993,0.8204,0.8323,0.8408,0.8453,0.8493,0.8541,0.8592,0.8617,0.8648,0.8672,0.87,0.8724,0.7995,0.8388,0.8583,0.871,0.8785,0.8821,0.8848,0.8861,0.888,0.8903,0.8931,0.7727,0.7974,0.8162,0.8342,0.852,0.8681,0.8782,0.8864,0.8933,0.8975,0.9004,0.903,0.9052,0.9059,0.9084,0.9096,0.911,0.9124,0.9136,0.9143,0.9161,0.9166,0.9177,0.9183,0.9192,0.9195,0.92,0.9213,0.9217,0.9221,0.9225,0.9228,0.923,0.9233,0.924,0.9248]
+    # plot_accuracy('./result', 'R100_P0.30_AP0.20_Alpha1.0_{}atk_minus{}'.format(atk, alp), rid, main_acc, "{}atker_test_minus{}".format(atk, alp))
+    # acc = []
+    # for id in range(35):
+    #     with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R100_P0.30_AP0.20_Alpha1.0_6atk_minus0.09/record/history{}.pkl'.format(id), 'rb') as test_f:
+    #         hist_dirty = CPU_Unpickler(test_f).load()
+    #         acc.append(hist_dirty["accuracy3"][0])
+    # print(acc)
     # ### Bang Nguyen Trong - test
     # # fedtask_name = 'R300_P0.30_AP0.20_clean0'
     # # # task_name = 'mnist_cnum100_dist2_skew0.5_seed0'
@@ -520,53 +529,4 @@ if __name__ == '__main__':
     # # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R300_P0.30_AP0.20_clean1/record/history0.pkl', 'rb') as test_f:
     # #     history_clean = CPU_Unpickler(test_f).load()
     
-    # # a, b, c, d = compute_alpha(history_dirty, history_clean, device)
-    # # print(a)
-    # # print(b)
-    # # print(c)
-    # # print(d)
-    # # plot_alpha('./result', [a, b, c, d], list_layers)
-    # for i in [223]:
-    # plot_clean('./result', device, round=25, layer='fc2.weight')
-    # plot_unlearn_term('./result', max_iters= 5, layer='fc2.weight')
-    # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R5_P0.30_AP0.20_ALGO0_clean0/record/history{}.pkl'.format(0), 'rb') as test_f:
-    #     hist_dirty = CPU_Unpickler(test_f).load()
-    # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R5_P0.30_AP0.20_ALGO0_clean1/record/history{}.pkl'.format(0), 'rb') as test_f:
-    #     hist_clean = CPU_Unpickler(test_f).load()
-
-    # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R5_P0.30_AP0.20_ALGO0_clean0/record/history{}.pkl'.format(1), 'rb') as test_f:
-    #     hist_dirty1 = CPU_Unpickler(test_f).load()
-    # with open('./fedtasksave/mnist_cnum100_dist2_skew0.5_seed0/R5_P0.30_AP0.20_ALGO0_clean1/record/history{}.pkl'.format(1), 'rb') as test_f:
-    #     hist_clean1 = CPU_Unpickler(test_f).load()
-    # print((hist_dirty['p'][0]*(hist_dirty['server_model'] - hist_dirty['models'][0]) - (hist_clean1['server_model']- hist_dirty1['server_model'])).state_dict())
-    # w = fmodule._model_sum([model_k * pk for model_k, pk in zip(hist_clean['models'], hist_clean['p'])])
-    # w1 = (hist_clean['p'][0] * hist_clean['models'][0]) + (hist_clean['p'][1] * hist_clean['models'][1]) + (hist_clean['p'][2] * hist_clean['models'][2])
-    # w1 = p0 + p1 + p2
-    # w2 = (hist_dirty['p'][0] * hist_dirty['models'][0]) + q0 + q1 + q2
-    # print(((1.0-sum(hist_clean['p']))*hist_clean['server_model'] + w1 - hist_clean1['server_model']).state_dict())
-    # print(hist_dirty['p'][3] - hist_clean['p'][2])
-    # w2 = (hist_dirty['p'][0] * hist_dirty['models'][0]) + (hist_dirty['p'][1] * hist_dirty['models'][1]) + (hist_dirty['p'][2] * hist_dirty['models'][2]) + (hist_dirty['p'][3] * hist_dirty['models'][3])
-    # print(((1.0-sum(hist_dirty['p']))*hist_dirty['server_model'] + w2 - hist_dirty1['server_model']).state_dict())
-    # print((hist_clean['server_model']- hist_dirty['server_model']).state_dict())
-
-    # print((w2 - w1 - (hist_dirty['p'][0] * hist_dirty['models'][0])).state_dict())
-    # idx = 2
-    # p0 = (hist_dirty['p'][1] * hist_dirty['models'][1])
-    # q0 = (hist_clean['p'][0] * hist_clean['models'][0])
-
-    # p1 = (hist_dirty['p'][2] * hist_dirty['models'][2]) 
-    # q1 = (hist_clean['p'][1] * hist_clean['models'][1])
-
-    # p2 = (hist_dirty['p'][3] * hist_dirty['models'][3]) 
-    # q2 = (hist_clean['p'][2] * hist_clean['models'][2])
-
-    # x = (hist_dirty['p'][0] * hist_dirty['models'][0])
-    # w1 = p0 + p1 + p2
-    # w2 = x + q0 + q1 + q2
-    # print((p0 + p1 - q0 - q1).state_dict())
-
-    # print((p0 - q0).state_dict())
-    # print((p1 - q1).state_dict())
-    # print((p2 - q2).state_dict())
-
-    # print(((hist_dirty['p'][idx + 1] * hist_dirty['models'][idx + 1]) - (hist_clean['p'][idx] * hist_clean['models'][idx])).state_dict())
+    
