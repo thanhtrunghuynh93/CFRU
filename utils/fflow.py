@@ -97,8 +97,8 @@ def setup_seed(seed):
     random.seed(1+seed)
     np.random.seed(21+seed)
     os.environ['PYTHONHASHSEED'] = str(seed)
-    torch.manual_seed(12+seed) ##seed -> 4, 5 // 12 + seed -> 6 // 42 + seed -> 0 // 43 + seed -> ok // 3407 -> not ok
-    torch.cuda.manual_seed_all(123+seed) ## choose seed -> 6
+    torch.manual_seed(12+seed) 
+    torch.cuda.manual_seed_all(123+seed) 
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
@@ -128,22 +128,17 @@ def initialize(option):
         s_atk = [52, 99, 0, 15, 20]
     else:
         None
-    s_atk = [0, 1, 2, 3, 4, 5]
+    s_atk = [0]
     option['attacker'] = s_atk
     
     # import pdb; pdb.set_trace()
     import torchvision.transforms as transforms
-    # transform = transforms.Compose([
-    #     transforms.RandomHorizontalFlip(),
-    #     transforms.Normalize((0.1307, ), (0.3081,))])
+    transform = transforms.Compose([
+        transforms.RandomHorizontalFlip(),
+        transforms.Normalize((0.1307, ), (0.3081,))])
     for cid in range(num_clients):
         if cid in s_atk:
             train_datas_attack[cid] = copy.deepcopy(train_datas_attack[0])
-            ## eee
-            transform = transforms.Compose([
-                # transforms.RandomHorizontalFlip(),
-                transforms.Normalize((0.1307, ), (0.3081,))])
-            ##
             train_datas_attack[cid].X = transform(train_datas_attack[cid].X)
     
     # init client

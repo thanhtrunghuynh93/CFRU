@@ -7,7 +7,7 @@ class Server(BasicServer):
     def __init__(self, option, model, clients, test_data = None, backtask_data = None):
         super(Server, self).__init__(option, model, clients, test_data, backtask_data)
         self.path_save = os.path.join('fedtasksave', self.option['task'],
-                                    "R{}_P{:.2f}_AP{:.2f}_Alpha1.0_6atk_minus{}".format(
+                                    "R{}_P{:.2f}_AP{:.2f}_Alpha1.0_1atk_minus{}".format(
                                         option['num_rounds'],
                                         option['proportion'],
                                         option['attacker_pct'],
@@ -31,14 +31,14 @@ class Server(BasicServer):
         clean_model = temp_model + self.unlearn_term_algo3
         test_metric3, test_loss3, test_backdoor3 = self.test(model= clean_model)
         ## clean metric 
-        # test_clean, _, test_backdoor = self.test(model= temp_model)
+        test_clean, _, test_backdoor = self.test(model= temp_model)
         # log
         save_logs = {
             "selected_clients": self.selected_clients,
             "models": models,
             "p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
             "server_model": self.model,
-            # "accuracy": [test_clean, test_backdoor]
+            "accuracy": [test_clean, test_backdoor],
             "unlearn_term_algo2": self.unlearn_term_algo2,
             "unlearn_term_algo3": self.unlearn_term_algo3,
             "uncertainty_round": uncertainty_round,
@@ -91,6 +91,7 @@ class Server(BasicServer):
                 round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
                 # unlearn 
                 self.unlearn_term_algo2, self.unlearn_term_algo3 = self.compute_unlearn_term(round_attack, attackers_round, t)
+                # self.unlearn_term_algo2 = self.compute_L2unlean_term_mask(round_attack, attackers_round, t)
 
         # import pdb; pdb.set_trace()
         self.save_models(t, models, uncertainty_round)
@@ -117,44 +118,6 @@ class Server(BasicServer):
         # alpha = 1.0 * self.gamma * sum(self.lipschitz_constances) / (round + 1)
         # alpha = - np.exp(-0.0911*round + 1.7597)
         alpha = - self.gamma
-        # start
-        # num_layers = len(unlearning_term3.state_dict().keys())
-        # # alpha changes over rounds
-        # if self.gamma == 1: 
-        #     alpha = np.array([-0.05 for i in range(num_layers)])
-        #     if round < 50:
-        #         alpha[:4] = -0.09
-        #     else:
-        #         alpha[:4] = -0.05
-        # elif self.gamma == 2:
-        #     alpha = np.array([-0.09 for i in range(num_layers)])
-        #     if round < 50:
-        #         alpha[4:] = -0.05
-        #     else:
-        #         alpha[4:] = -0.02
-        # elif self.gamma == 3:
-        #     alpha = np.array([-0.05 for i in range(num_layers)])
-        #     if round < 50:
-        #         alpha[:4] = -0.09
-        #         alpha[4:] = -0.05
-        #     else:
-        #         alpha[:4] = -0.05
-        #         alpha[4:] = -0.02
-        # elif self.gamma == 4:
-        #     alpha = np.array([-0.02 for i in range(num_layers)])
-        #     if round < 50:
-        #         alpha[:4] = -0.09
-        #     else:
-        #         alpha[:4] = -0.05
-        # elif self.gamma == 5:
-        #     alpha = np.array([-0.05 for i in range(num_layers)])
-        #     if round < 50:
-        #         alpha[4:] = -0.05
-        #     else:
-        #         alpha[4:] = -0.02
-        # elif self.gamma == 0.005:
-        #     alpha 
-        #     raise Exception("Invalid value for gamma")
         # compute beta constraint in lipschitz inequality
         list_beta = []
         for idx in range(len(self.beta)): # idx: round_id
@@ -184,6 +147,60 @@ class Server(BasicServer):
         unlearning_term3 = unlearning_term3 * self.theta
         return unlearning_term2, unlearning_term3
 
+    # def update_beta(self):
+    #     sum_vol = 0.0
+    #     for cid in self.selected_clients:
+    #         sum_vol = sum_vol + (1.0 * self.client_vols[cid]/self.data_vol)**2
+    #     self.beta.append(sum_vol)
+        
+    # def compute_L2unlean_term(self, round_attack, attackers_round, round):
+    #     unlearning_term = fmodule._create_new_model(self.model) * 0.0
+    #     atker_update_term = fmodule._create_new_model(self.model) * 0.0
+    #     sqrt_term = fmodule._create_new_model(self.model) * 0.0
+    #     # compute alpha 
+    #     alpha = -self.gamma
+    #     # compute beta
+    #     list_beta = []
+    #     for idx in range(len(self.beta)): # idx: round_id
+    #         beta = self.beta[idx]
+    #         if idx in round_attack:
+    #             for cid in attackers_round[round_attack.index(idx)]:
+    #                 beta = beta - (1.0 * self.client_vols[cid]/self.data_vol)**2
+    #         list_beta.append(beta)
+    #     # compute unlearning_term
+    #     for idx in range(round + 1):
+    #         if idx in round_attack: 
+    #             for c_id in attackers_round[round_attack.index(idx)]:
+    #                 atker_update_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[idx][str(c_id)].to(self.model.get_device())
+    #                 self.grads_all_round[idx][str(c_id)].cpu()
+    #         sqrt_term = sqrt_term + fmodule._model_elementwise_multiply(unlearning_term, unlearning_term) * list_beta[idx]
+    #         unlearning_term = atker_update_term + fmodule.sqrt(sqrt_term) * (alpha * np.sqrt(idx + 1))
+    #     return unlearning_term
+    
+    # def compute_L2unlean_term_mask(self,round_attack, attackers_round, round):
+    #     unlearning_term = fmodule._create_new_model(self.model) * 0.0
+    #     atker_update_term = fmodule._create_new_model(self.model) * 0.0
+    #     sqrt_term = fmodule._create_new_model(self.model) * 0.0
+    #     # compute alpha 
+    #     alpha = -self.gamma
+    #     # compute beta
+    #     list_beta = []
+    #     for idx in range(len(self.beta)): # idx: round_id
+    #         beta = self.beta[idx]
+    #         if idx in round_attack:
+    #             for cid in attackers_round[round_attack.index(idx)]:
+    #                 beta = beta - (1.0 * self.client_vols[cid]/self.data_vol)**2
+    #         list_beta.append(beta)
+    #     # compute unlearning_term
+    #     for idx in range(round + 1):
+    #         if idx in round_attack: 
+    #             for c_id in attackers_round[round_attack.index(idx)]:
+    #                 atker_update_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[idx][str(c_id)].to(self.model.get_device())
+    #                 self.grads_all_round[idx][str(c_id)].cpu()
+    #         sqrt_term = sqrt_term + fmodule._model_elementwise_multiply(unlearning_term, unlearning_term) * list_beta[idx]
+    #         unlearning_term = atker_update_term + fmodule._model_elementwise_multiply(fmodule._model_sign(unlearning_term), fmodule.sqrt(sqrt_term)) * (alpha * np.sqrt(idx + 1))
+    #     return unlearning_term
+    
     def sample(self, t):
         self.fixed_selected_clients[t] = [i for i in range(30)]
         ##

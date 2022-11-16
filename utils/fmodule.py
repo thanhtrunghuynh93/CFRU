@@ -90,6 +90,10 @@ def exp(m):
     """element-wise exp"""
     return element_wise_func(m, torch.exp)
 
+def sqrt(m):
+    """element-wise sqrt"""
+    return element_wise_func(m, torch.sqrt)
+
 def log(m):
     """element-wise log"""
     return element_wise_func(m, torch.log)
@@ -201,8 +205,85 @@ def _model_elementwise_divide(m1, m2):
         _modeldict_cp(res.state_dict(), _modeldict_elementwise_divide(m1.state_dict(), m2.state_dict()))
     return res
 
+## model * model element_wise
+def _model_square(m):
+    op_with_graph = m.ingraph
+    res = Model().to(m.get_device())
+    if op_with_graph:
+        res.op_with_graph()
+        ml = get_module_from_model(m)
+        mlr = get_module_from_model(res)
+        for n, nr in zip(ml, mlr):
+            rd =  _modeldict_square(n._parameters)
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_square(m.state_dict()))
+    return res
+
+def _modeldict_square(md):
+    res = {}
+    for layer in md.keys():
+        if md[layer] is None:
+            res[layer] = None
+            continue
+        res[layer] = torch.pow(md[layer], 2)
+    return res
+
+## elementwise multiply 2 models 
 def _model_elementwise_multiply(m1, m2):
-    pass 
+    op_with_graph = m1.ingraph or m2.ingraph
+    res = Model().to(m1.get_device())
+    if op_with_graph:
+        res.op_with_graph()
+        ml1 = get_module_from_model(m1)
+        ml2 = get_module_from_model(m2)
+        mlr = get_module_from_model(res)
+        for n1, n2, nr in zip(ml1, ml2, mlr):
+            rd = _modeldict_elementwise_multiply(n1._parameters, n2._parameters)
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_elementwise_multiply(m1.state_dict(), m2.state_dict()))
+    return res
+
+def _modeldict_elementwise_multiply(md1, md2):
+    res = {}
+    for layer in md1.keys():
+        if md1[layer] is None:
+            res[layer] = None
+            continue
+        res[layer] = md1[layer] * md2[layer]
+    return res
+## sign of model as weight
+def _model_sign(m):
+    op_with_graph = m.ingraph
+    res = Model().to(m.get_device())
+    sign = _model_elementwise_divide(m, abs(m))
+    if op_with_graph:
+        res.op_with_graph()
+        ml = get_module_from_model(sign)
+        mlr = get_module_from_model(res)
+        for n, nr in zip(ml, mlr):
+            rd =  _modeldict_sign(n._parameters)
+            for l in nr._parameters.keys():
+                if nr._parameters[l] is None: continue
+                nr._parameters[l] = rd[l]
+    else:
+        _modeldict_cp(res.state_dict(), _modeldict_sign(sign.state_dict()))
+    return res
+
+def _modeldict_sign(md):
+    res = {}
+    for layer in md.keys():
+        if md[layer] is None:
+            res[layer] = None
+            continue
+        res[layer] = md[layer]
+        res[layer][res[layer] == 0] = 1
+    return res
 
 def _model_specificial_layers(m, list_layers = ['fc2.weight', 'fc2.bias']):
     op_with_graph = m.ingraph
@@ -489,9 +570,6 @@ def _modeldict_elementwise_divide(md1, md2):
         res[layer] = torch.div(md1[layer], md2[layer])
         res[layer] = torch.nan_to_num(res[layer], nan = 0.0, posinf = 1.0, neginf = -1.0)
     return res
-
-def _modeldict_elementwise_multiply(md1, md2):
-    pass
 
 def _modeldict_norm(md, p=2):
     res = torch.tensor(0.).to(md[list(md)[0]].device)
