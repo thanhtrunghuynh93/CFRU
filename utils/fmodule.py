@@ -4,6 +4,8 @@ from torch import nn
 device=None
 TaskCalculator=None
 Model = None
+data_conf = None
+option = None
 
 class FModule(nn.Module):
     def __init__(self):
@@ -77,6 +79,9 @@ class FModule(nn.Module):
     def get_device(self):
         return next(self.parameters()).device
 
+    # def to(self, device):
+    #     return super(FModule, self).to(device)
+
 def normalize(m):
     return m/(m**2)
 
@@ -104,7 +109,7 @@ def abs(m):
 
 def element_wise_func(m, func):
     if not m: return None
-    res = Model().to(m.get_device())
+    res = Model(data_conf, option).to(m.get_device())
     if m.ingraph:
         res.op_with_graph()
         ml = get_module_from_model(m)
@@ -120,7 +125,7 @@ def element_wise_func(m, func):
 def _model_sum(ms):
     if not ms: return None
     op_with_graph = sum([mi.ingraph for mi in ms]) > 0
-    res = Model().to(ms[0].get_device())
+    res = Model(data_conf, option).to(ms[0].get_device())
     if op_with_graph:
         mlks = [get_module_from_model(mi) for mi in ms]
         mlr = get_module_from_model(res)
@@ -139,7 +144,7 @@ def _model_average(ms = [], p = []):
     if not ms: return None
     if not p: p = [1.0 / len(ms) for _ in range(len(ms))]
     op_with_graph = sum([w.ingraph for w in ms]) > 0
-    res = Model().to(ms[0].get_device())
+    res = Model(data_conf, option).to(ms[0].get_device())
     if op_with_graph:
         mlks = [get_module_from_model(mi) for mi in ms]
         mlr = get_module_from_model(res)
@@ -154,9 +159,25 @@ def _model_average(ms = [], p = []):
         _modeldict_cp(res.state_dict(), _modeldict_weighted_average([mi.state_dict() for mi in ms], p))
     return res
 
+def _model_merge_(m1, m2):
+    op_with_graph = m1.ingraph or m2.ingraph
+    if op_with_graph:
+        raise Exception('op_with_graph is not allowed in this case!')
+        ml1 = get_module_from_model(m1)
+        ml2 = get_module_from_model(m2)
+        for n1, n2 in zip(ml1, ml2):
+            for l in n1._parameters.keys():
+                if n2._parameters[l] is None: continue
+                if l == 'embed_user.weight': continue
+                n1._parameters[l] = n2._parameters[l]
+            # import pdb; pdb.set_trace()
+    else:
+        _modeldict_merge(m1.state_dict(), m2.state_dict())
+    return
+
 def _model_add(m1, m2):
     op_with_graph = m1.ingraph or m2.ingraph
-    res = Model().to(m1.get_device())
+    res = Model(data_conf, option).to(m1.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml1 = get_module_from_model(m1)
@@ -173,7 +194,7 @@ def _model_add(m1, m2):
 
 def _model_sub(m1, m2):
     op_with_graph = m1.ingraph or m2.ingraph
-    res = Model().to(m1.get_device())
+    res = Model(data_conf, option).to(m1.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml1 = get_module_from_model(m1)
@@ -190,7 +211,7 @@ def _model_sub(m1, m2):
 
 def _model_elementwise_divide(m1, m2):
     op_with_graph = m1.ingraph or m2.ingraph
-    res = Model().to(m1.get_device())
+    res = Model(data_conf, option).to(m1.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml1 = get_module_from_model(m1)
@@ -208,7 +229,7 @@ def _model_elementwise_divide(m1, m2):
 ## model * model element_wise
 def _model_square(m):
     op_with_graph = m.ingraph
-    res = Model().to(m.get_device())
+    res = Model(data_conf, option).to(m.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml = get_module_from_model(m)
@@ -234,7 +255,7 @@ def _modeldict_square(md):
 ## elementwise multiply 2 models 
 def _model_elementwise_multiply(m1, m2):
     op_with_graph = m1.ingraph or m2.ingraph
-    res = Model().to(m1.get_device())
+    res = Model(data_conf, option).to(m1.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml1 = get_module_from_model(m1)
@@ -260,7 +281,7 @@ def _modeldict_elementwise_multiply(md1, md2):
 ## sign of model as weight
 def _model_sign(m):
     op_with_graph = m.ingraph
-    res = Model().to(m.get_device())
+    res = Model(data_conf, option).to(m.get_device())
     sign = _model_elementwise_divide(m, abs(m))
     if op_with_graph:
         res.op_with_graph()
@@ -287,7 +308,7 @@ def _modeldict_sign(md):
 
 def _model_specificial_layers(m, list_layers = ['fc2.weight', 'fc2.bias']):
     op_with_graph = m.ingraph
-    res = Model().to(m.get_device())
+    res = Model(data_conf, option).to(m.get_device())
     if op_with_graph:
         module_names = [name for name, _ in m.named_children()]
         module_dict = {}
@@ -393,7 +414,7 @@ def _model_max_element(m, list_layers = []):
 
 def _model_scale(m, s):
     op_with_graph = m.ingraph
-    res = Model().to(m.get_device())
+    res = Model(data_conf, option).to(m.get_device())
     if op_with_graph:
         ml = get_module_from_model(m)
         mlr = get_module_from_model(res)
@@ -461,6 +482,14 @@ def get_module_from_model(model, res = None):
             get_module_from_model(model.__getattr__(name), res)
     return res
 
+def _modeldict_merge(md1, md2):
+    for layer in md1.keys():
+        if layer == 'embed_user.weight':
+            continue
+        md1[layer].data.copy_(md2[layer])
+        # if layer == 'embed_item.weight':
+        #     md1[layer].data.copy_(md2[layer])
+    return
 
 def _modeldict_cp(md1, md2):
     for layer in md1.keys():
@@ -661,7 +690,7 @@ def _modeldict_print(md, only_requires_grad = False):
 ## Apply Gaussian Distribution to model
 def _model_to_Gaussian(m1, mean, std):
     op_with_graph = m1.ingraph
-    res = Model().to(m1.get_device())
+    res = Model(data_conf, option).to(m1.get_device())
     if op_with_graph:
         res.op_with_graph()
         ml1 = get_module_from_model(m1)
@@ -686,7 +715,7 @@ def _modeldict_to_Gaussian(md1, mean, std, device):
     return res
 
 def _create_new_model(md):
-    res = Model().to(md.get_device())
+    res = Model(data_conf, option).to(md.get_device())
     return res
 
 def _model_to_cpu(md):
@@ -699,7 +728,7 @@ def _get_numel(md):
     pass
 
 def multi_layer_by_alpha(model, alphas):
-    res = Model().to(model.get_device())
+    res = Model(data_conf, option).to(model.get_device())
     def _modeldict_multiply_alpha(model, alphas):
         res = {}
         for i, layer in enumerate(model.keys()):

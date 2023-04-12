@@ -2,18 +2,18 @@
 DISTRIBUTION OF DATASET
 -----------------------------------------------------------------------------------
 balance:
-    iid:            0 : identical and independent distributions of the dataset among clients
-    label skew:     1 Quantity:  each party owns data samples of a fixed number of labels.
-                    2 Dirichlet: each party is allocated a proportion of the samples of each label according to Dirichlet distribution.
-                    3 Shard: each party is allocated the same numbers of shards that is sorted by the labels of the data
+	iid:            0 : identical and independent distributions of the dataset among clients
+	label skew:     1 Quantity:  each party owns data samples of a fixed number of labels.
+					2 Dirichlet: each party is allocated a proportion of the samples of each label according to Dirichlet distribution.
+					3 Shard: each party is allocated the same numbers of shards that is sorted by the labels of the data
 -----------------------------------------------------------------------------------
 depends on partitions:
-    feature skew:   4 Noise: each party owns data samples of a fixed number of labels.
-                    5 ID: For Shakespeare\FEMNIST, we divide and assign the writers (and their characters) into each party randomly and equally.
+	feature skew:   4 Noise: each party owns data samples of a fixed number of labels.
+					5 ID: For Shakespeare\FEMNIST, we divide and assign the writers (and their characters) into each party randomly and equally.
 -----------------------------------------------------------------------------------
 imbalance:
-    iid:            6 Vol: only the vol of local dataset varies.
-    niid:           7 Vol: for generating synthetic data
+	iid:            6 Vol: only the vol of local dataset varies.
+	niid:           7 Vol: for generating synthetic data
 """
 import torch
 import ujson
@@ -24,603 +24,914 @@ import urllib
 import zipfile
 import os
 import ssl
+import math
+import heapq
 import copy
 from torch.utils.data import Dataset, DataLoader
+from collections import defaultdict
 import torch
 from torch import nn
 import torch.nn.functional as F
 ssl._create_default_https_context = ssl._create_unverified_context
 import importlib
-from benchmark.uncertainty_loss import edl_mse_loss, mse_loss, loglikelihood_loss, kl_divergence, one_hot_embedding
+from benchmark.rec_loss import bpr_loss, l2_reg_loss
 import torchvision.transforms as transforms
+from random import shuffle,randint,choice,sample
 
 def set_random_seed(seed=0):
-    """Set random seed"""
-    random.seed(3 + seed)
-    np.random.seed(97 + seed)
-    os.environ['PYTHONHASHSEED'] = str(seed)
+	"""Set random seed"""
+	random.seed(3 + seed)
+	np.random.seed(97 + seed)
+	os.environ['PYTHONHASHSEED'] = str(seed)
 
 def download_from_url(url= None, filepath = '.'):
-    """Download dataset from url to filepath."""
-    if url: urllib.request.urlretrieve(url, filepath)
-    return filepath
+	"""Download dataset from url to filepath."""
+	if url: urllib.request.urlretrieve(url, filepath)
+	return filepath
 
 def extract_from_zip(src_path, target_path):
-    """Unzip the .zip file (src_path) to target_path"""
-    f = zipfile.ZipFile(src_path)
-    f.extractall(target_path)
-    targets = f.namelist()
-    f.close()
-    return [os.path.join(target_path, tar) for tar in targets]
+	"""Unzip the .zip file (src_path) to target_path"""
+	f = zipfile.ZipFile(src_path)
+	f.extractall(target_path)
+	targets = f.namelist()
+	f.close()
+	return [os.path.join(target_path, tar) for tar in targets]
+
+def find_k_largest(K, candidates):
+	n_candidates = []
+	for iid, score in enumerate(candidates[:K]):
+		n_candidates.append((score, iid))
+
+	heapq.heapify(n_candidates)
+
+	for iid, score in enumerate(candidates[K:]):
+		if score > n_candidates[0][0]:
+			# ...
+			heapq.heapreplace(n_candidates, (score, iid + K))
+	n_candidates.sort(key=lambda d: d[0], reverse=True)
+	ids = [item[1] for item in n_candidates]
+	k_largest_scores = [item[0] for item in n_candidates]
+	return ids, k_largest_scores
+
+class Metric(object):
+	def __init__(self):
+		pass
+
+	@staticmethod
+	def hits(origin, res):
+		hit_count = {}
+		for user in origin:
+			items = list(origin[user].keys())
+			predicted = [item[0] for item in res[user]]
+			hit_count[user] = len(set(items).intersection(set(predicted)))
+		return hit_count
+
+	@staticmethod
+	def hit_ratio(origin, hits):
+		"""
+		Note: This type of hit ratio calculates the fraction:
+		 (# retrieved interactions in the test set / #all the interactions in the test set)
+		"""
+		total_num = 0
+		for user in origin:
+			items = list(origin[user].keys())
+			total_num += len(items)
+		hit_num = 0
+		for user in hits:
+			hit_num += hits[user]
+		return round(hit_num/total_num,5)
+
+	@staticmethod
+	def precision(hits, N):
+		prec = sum([hits[user] for user in hits])
+		return round(prec / (len(hits) * N),5)
+
+	@staticmethod
+	def recall(hits, origin):
+		recall_list = [hits[user]/len(origin[user]) for user in hits]
+		recall = round(sum(recall_list) / len(recall_list),5)
+		return recall
+
+	@staticmethod
+	def F1(prec, recall):
+		if (prec + recall) != 0:
+			return round(2 * prec * recall / (prec + recall),5)
+		else:
+			return 0
+
+	@staticmethod
+	def MAE(res):
+		error = 0
+		count = 0
+		for entry in res:
+			error+=abs(entry[2]-entry[3])
+			count+=1
+		if count==0:
+			return error
+		return round(error/count,5)
+
+	@staticmethod
+	def RMSE(res):
+		error = 0
+		count = 0
+		for entry in res:
+			error += (entry[2] - entry[3])**2
+			count += 1
+		if count==0:
+			return error
+		return round(math.sqrt(error/count),5)
+
+	@staticmethod
+	def NDCG(origin,res,N):
+		sum_NDCG = 0
+		for user in res:
+			DCG = 0
+			IDCG = 0
+			#1 = related, 0 = unrelated
+			for n, item in enumerate(res[user]):
+				if item[0] in origin[user]:
+					DCG+= 1.0/math.log(n+2,2)
+			for n, item in enumerate(list(origin[user].keys())[:N]):
+				IDCG+=1.0/math.log(n+2,2)
+			sum_NDCG += DCG / IDCG
+		return round(sum_NDCG / len(res),5)
 
 class BasicTaskGen:
-    _TYPE_DIST = {
-        0: 'iid',
-        1: 'label_skew_quantity',
-        2: 'label_skew_dirichlet',
-        3: 'label_skew_shard',
-        4: 'feature_skew_noise',
-        5: 'feature_skew_id',
-        6: 'iid_volumn_skew',
-        7: 'niid_volumn_skew',
-        8: 'concept skew',
-        9: 'concept and feature skew and balance',
-        10: 'concept and feature skew and imbalance',
-    }
-    _TYPE_DATASET = ['2DImage', '3DImage', 'Text', 'Sequential', 'Graph', 'Tabular']
+	_TYPE_DIST = {
+		0: 'iid',
+		1: 'label_skew_quantity',
+		2: 'label_skew_dirichlet',
+		3: 'label_skew_shard',
+		4: 'feature_skew_noise',
+		5: 'feature_skew_id',
+		6: 'iid_volumn_skew',
+		7: 'niid_volumn_skew',
+		8: 'concept skew',
+		9: 'concept and feature skew and balance',
+		10: 'concept and feature skew and imbalance',
+		11: 'iid division by users (fedRec)',
+		12: 'non-iid division by users (fedRec)'
+	}
+	_TYPE_DATASET = ['2DImage', '3DImage', 'Text', 'Sequential', 'Graph', 'Tabular']
 
-    def __init__(self, benchmark, dist_id, skewness, rawdata_path, seed=0):
-        self.benchmark = benchmark
-        self.rootpath = './fedtask'
-        self.rawdata_path = rawdata_path
-        self.dist_id = dist_id
-        self.dist_name = self._TYPE_DIST[dist_id]
-        self.skewness = 0 if dist_id==0 else skewness
-        self.num_clients = -1
-        self.seed = seed
-        set_random_seed(self.seed)
+	def __init__(self, benchmark, dist_id, skewness, rawdata_path, seed=0):
+		self.benchmark = benchmark
+		self.rootpath = './fedtask'
+		self.rawdata_path = rawdata_path
+		self.dist_id = dist_id
+		self.dist_name = self._TYPE_DIST[dist_id]
+		self.skewness = 0 if dist_id==0 else skewness
+		self.num_clients = -1
+		self.seed = seed
+		set_random_seed(self.seed)
+		if not os.path.exists(self.rootpath):
+			os.makedirs(self.rootpath, exist_ok=True)
 
-    def run(self):
-        """The whole process to generate federated task. """
-        pass
+	def run(self):
+		"""The whole process to generate federated task. """
+		pass
 
-    def load_data(self):
-        """Download and load dataset into memory."""
-        pass
+	def load_data(self):
+		"""Download and load dataset into memory."""
+		pass
 
-    def partition(self):
-        """Partition the data according to 'dist' and 'skewness'"""
-        pass
+	def partition(self):
+		"""Partition the data according to 'dist' and 'skewness'"""
+		pass
 
-    def save_data(self):
-        """Save the federated dataset to the task_path/data.
-        This algorithm should be implemented as the way to read
-        data from disk that is defined by DataReader.read_data()
-        """
-        pass
+	def save_data(self):
+		"""Save the federated dataset to the task_path/data.
+		This algorithm should be implemented as the way to read
+		data from disk that is defined by DataReader.read_data()
+		"""
+		pass
 
-    def save_info(self):
-        """Save the task infomation to the .json file stored in taskpath"""
-        pass
+	def save_info(self):
+		"""Save the task infomation to the .json file stored in taskpath"""
+		pass
 
-    def get_taskname(self):
-        """Create task name and return it."""
-        taskname = '_'.join([self.benchmark, 'cnum' +  str(self.num_clients), 'dist' + str(self.dist_id), 'skew' + str(self.skewness).replace(" ", ""), 'seed'+str(self.seed)])
-        return taskname
+	def get_taskname(self):
+		"""Create task name and return it."""
+		taskname = '_'.join([self.benchmark, 'cnum' +  str(self.num_clients), 'dist' + str(self.dist_id), 'skew' + str(self.skewness).replace(" ", ""), 'seed'+str(self.seed)])
+		return taskname
 
-    def get_client_names(self):
-        k = str(len(str(self.num_clients)))
-        return [('Client{:0>' + k + 'd}').format(i) for i in range(self.num_clients)]
+	def get_client_names(self):
+		k = str(len(str(self.num_clients)))
+		return [('Client{:0>' + k + 'd}').format(i) for i in range(self.num_clients)]
 
-    def create_task_directories(self):
-        """Create the directories of the task."""
-        taskname = self.get_taskname()
-        taskpath = os.path.join(self.rootpath, taskname)
-        os.mkdir(taskpath)
-        os.mkdir(os.path.join(taskpath, 'record'))
+	def create_task_directories(self):
+		"""Create the directories of the task."""
+		taskname = self.get_taskname()
+		taskpath = os.path.join(self.rootpath, taskname)
+		os.mkdir(taskpath)
+		os.mkdir(os.path.join(taskpath, 'record'))
 
-    def _check_task_exist(self):
-        """Check whether the task already exists."""
-        taskname = self.get_taskname()
-        return os.path.exists(os.path.join(self.rootpath, taskname))
+	def _check_task_exist(self):
+		"""Check whether the task already exists."""
+		taskname = self.get_taskname()
+		return os.path.exists(os.path.join(self.rootpath, taskname))
 
 class DefaultTaskGen(BasicTaskGen):
-    def __init__(self, benchmark, dist_id, skewness, rawdata_path, num_clients=1, minvol=10, seed=0):
-        super(DefaultTaskGen, self).__init__(benchmark, dist_id, skewness, rawdata_path, seed)
-        self.minvol=minvol
-        self.num_classes = -1
-        self.train_data = None
-        self.test_data = None
-        self.num_clients = num_clients
-        self.cnames = self.get_client_names()
-        self.taskname = self.get_taskname()
-        self.taskpath = os.path.join(self.rootpath, self.taskname)
-        self.save_data = self.XYData_to_json
-        self.datasrc = {
-            'lib': None,
-            'class_name': None,
-            'args':[]
-        }
+	def __init__(self, benchmark, dist_id, skewness, rawdata_path, num_clients=1, minvol=10, seed=0):
+		super(DefaultTaskGen, self).__init__(benchmark, dist_id, skewness, rawdata_path, seed)
+		self.minvol=minvol
+		self.num_classes = -1
+		# load from data
+		self.train_data = None
+		self.test_data = None
+		self.removal_data = None
+		self.user_num = None
+		self.item_num = None
+		self.local_user_idxs = None
+		self.train_mat = None
 
-    def run(self):
-        """ Generate federated task"""
-        # check if the task exists
-        if not self._check_task_exist():
-            self.create_task_directories()
-        else:
-            print("Task Already Exists.")
-            return
-        # read raw_data into self.train_data and self.test_data
-        print('-----------------------------------------------------')
-        print('Loading...')
-        self.load_data()
-        print('Done.')
-        # partition data and hold-out for each local dataset
-        print('-----------------------------------------------------')
-        print('Partitioning data...')
-        local_datas = self.partition()
-        train_cidxs, valid_cidxs = self.local_holdout(local_datas, rate=0.8, shuffle=True)
-        # Vu Viet Bach
-        self.train_cidxs = train_cidxs
-        self.valid_cidxs = valid_cidxs
-        print('Done.')
-        # save task infomation as .json file and the federated dataset
-        print('-----------------------------------------------------')
-        print('Saving data...')
-        self.save_info()
-        self.save_data(train_cidxs, valid_cidxs)
-        print('Done.')
-        return
+		self.num_clients = num_clients
+		self.cnames = self.get_client_names()
+		self.taskname = self.get_taskname()
+		self.taskpath = os.path.join(self.rootpath, self.taskname)
+		self.save_data = self.XYData_to_json
+		self.datasrc = {
+			'lib': None,
+			'class_name': None,
+			'args':[]
+		}
 
-    def load_data(self):
-        """ load and pre-process the raw data"""
-        return
+	def run(self):
+		""" Generate federated task"""
+		# check if the task exists
+		if not self._check_task_exist():
+			self.create_task_directories()
+		else:
+			print("Task Already Exists.")
+			return
+		# read raw_data into self.train_data and self.test_data
+		print('-----------------------------------------------------')
+		print('Loading...')
+		self.load_data()
+		print('Done.')
+		# partition data and hold-out for each local dataset
+		print('-----------------------------------------------------')
+		print('Partitioning data...')
+		local_datas = self.partition()
+		train_cidxs, valid_cidxs = self.local_holdout(local_datas, rate=1.0, shuffle=True)
+		#
+		self.train_cidxs = train_cidxs
+		self.valid_cidxs = valid_cidxs
+		print('Length of valid dataset: {}'.format(len(self.valid_cidxs[-1])))
+		print('Done.')
+		# save task infomation as .json file and the federated dataset
+		print('-----------------------------------------------------')
+		print('Saving data...')
+		self.save_info()
+		self.save_data(train_cidxs, valid_cidxs) # XYData_to_json
+		print('Done.')
+		return
 
-    def partition(self):
-        # Partition self.train_data according to the delimiter and return indexes of data owned by each client as [c1data_idxs, ...] where the type of each element is list(int)
-        if self.dist_id == 0:
-            """IID"""
-            d_idxs = np.random.permutation(len(self.train_data))
-            local_datas = np.array_split(d_idxs, self.num_clients)
+	def load_data(self):
+		""" load and pre-process the raw data"""
+		return
 
-        elif self.dist_id == 1:
-            """label_skew_quantity"""
-            self.skewness = min(max(0, self.skewness),1.0)
-            dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
-            num = max(int((1-self.skewness)*self.num_classes), 1)
-            K = self.num_classes
-            local_datas = [[] for _ in range(self.num_clients)]
-            if num == K:
-                for k in range(K):
-                    idx_k = [p[0] for p in dpairs if p[1]==k]
-                    np.random.shuffle(idx_k)
-                    split = np.array_split(idx_k, self.num_clients)
-                    for cid in range(self.num_clients):
-                        local_datas[cid].extend(split[cid].tolist())
-            else:
-                times = [0 for _ in range(self.num_classes)]
-                contain = []
-                for i in range(self.num_clients):
-                    current = [i % K]
-                    times[i % K] += 1
-                    j = 1
-                    while (j < num):
-                        ind = random.randint(0, K - 1)
-                        if (ind not in current):
-                            j = j + 1
-                            current.append(ind)
-                            times[ind] += 1
-                    contain.append(current)
-                for k in range(K):
-                    idx_k = [p[0] for p in dpairs if p[1]==k]
-                    np.random.shuffle(idx_k)
-                    split = np.array_split(idx_k, times[k])
-                    ids = 0
-                    for cid in range(self.num_clients):
-                        if k in contain[cid]:
-                            local_datas[cid].extend(split[ids].tolist())
-                            ids += 1
+	def partition(self):
+		# Partition self.train_data according to the delimiter and return indexes of data owned by each client as [c1data_idxs, ...] where the type of each element is list(int)
+		if self.dist_id == 0:
+			"""IID"""
+			d_idxs = np.random.permutation(len(self.train_data))
+			local_datas = np.array_split(d_idxs, self.num_clients)
 
-        elif self.dist_id == 2:
-            """label_skew_dirichlet"""
-            min_size = 0
-            dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
-            local_datas = [[] for _ in range(self.num_clients)]
-            while min_size < self.minvol:
-                idx_batch = [[] for i in range(self.num_clients)]
-                for k in range(self.num_classes):
-                    idx_k = [p[0] for p in dpairs if p[1]==k]
-                    np.random.shuffle(idx_k)
-                    proportions = np.random.dirichlet(np.repeat(self.skewness, self.num_clients))
-                    ## Balance
-                    proportions = np.array([p * (len(idx_j) < len(self.train_data)/ self.num_clients) for p, idx_j in zip(proportions, idx_batch)])
-                    proportions = proportions / proportions.sum()
-                    proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
-                    idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
-                    min_size = min([len(idx_j) for idx_j in idx_batch])
-            for j in range(self.num_clients):
-                np.random.shuffle(idx_batch[j])
-                local_datas[j].extend(idx_batch[j])
+		elif self.dist_id == 1:
+			"""label_skew_quantity"""
+			self.skewness = min(max(0, self.skewness),1.0)
+			dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
+			num = max(int((1-self.skewness)*self.num_classes), 1)
+			K = self.num_classes
+			local_datas = [[] for _ in range(self.num_clients)]
+			if num == K:
+				for k in range(K):
+					idx_k = [p[0] for p in dpairs if p[1]==k]
+					np.random.shuffle(idx_k)
+					split = np.array_split(idx_k, self.num_clients)
+					for cid in range(self.num_clients):
+						local_datas[cid].extend(split[cid].tolist())
+			else:
+				times = [0 for _ in range(self.num_classes)]
+				contain = []
+				for i in range(self.num_clients):
+					current = [i % K]
+					times[i % K] += 1
+					j = 1
+					while (j < num):
+						ind = random.randint(0, K - 1)
+						if (ind not in current):
+							j = j + 1
+							current.append(ind)
+							times[ind] += 1
+					contain.append(current)
+				for k in range(K):
+					idx_k = [p[0] for p in dpairs if p[1]==k]
+					np.random.shuffle(idx_k)
+					split = np.array_split(idx_k, times[k])
+					ids = 0
+					for cid in range(self.num_clients):
+						if k in contain[cid]:
+							local_datas[cid].extend(split[ids].tolist())
+							ids += 1
 
-        elif self.dist_id == 3:
-            """label_skew_shard"""
-            dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
-            self.skewness = min(max(0, self.skewness), 1.0)
-            num_shards = max(int((1 - self.skewness) * self.num_classes * 2), 1)
-            client_datasize = int(len(self.train_data) / self.num_clients)
-            all_idxs = [i for i in range(len(self.train_data))]
-            z = zip([p[1] for p in dpairs], all_idxs)
-            z = sorted(z)
-            labels, all_idxs = zip(*z)
-            shardsize = int(client_datasize / num_shards)
-            idxs_shard = range(int(self.num_clients * num_shards))
-            local_datas = [[] for i in range(self.num_clients)]
-            for i in range(self.num_clients):
-                rand_set = set(np.random.choice(idxs_shard, num_shards, replace=False))
-                idxs_shard = list(set(idxs_shard) - rand_set)
-                for rand in rand_set:
-                    local_datas[i].extend(all_idxs[rand * shardsize:(rand + 1) * shardsize])
+		elif self.dist_id == 2:
+			"""label_skew_dirichlet"""
+			min_size = 0
+			dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
+			local_datas = [[] for _ in range(self.num_clients)]
+			while min_size < self.minvol:
+				idx_batch = [[] for i in range(self.num_clients)]
+				for k in range(self.num_classes):
+					idx_k = [p[0] for p in dpairs if p[1]==k]
+					np.random.shuffle(idx_k)
+					proportions = np.random.dirichlet(np.repeat(self.skewness, self.num_clients))
+					## Balance
+					proportions = np.array([p * (len(idx_j) < len(self.train_data)/ self.num_clients) for p, idx_j in zip(proportions, idx_batch)])
+					proportions = proportions / proportions.sum()
+					proportions = (np.cumsum(proportions) * len(idx_k)).astype(int)[:-1]
+					idx_batch = [idx_j + idx.tolist() for idx_j, idx in zip(idx_batch, np.split(idx_k, proportions))]
+					min_size = min([len(idx_j) for idx_j in idx_batch])
+			for j in range(self.num_clients):
+				np.random.shuffle(idx_batch[j])
+				local_datas[j].extend(idx_batch[j])
 
-        elif self.dist_id == 4:
-            pass
+		elif self.dist_id == 3:
+			"""label_skew_shard"""
+			dpairs = [[did, self.train_data[did][-1]] for did in range(len(self.train_data))]
+			self.skewness = min(max(0, self.skewness), 1.0)
+			num_shards = max(int((1 - self.skewness) * self.num_classes * 2), 1)
+			client_datasize = int(len(self.train_data) / self.num_clients)
+			all_idxs = [i for i in range(len(self.train_data))]
+			z = zip([p[1] for p in dpairs], all_idxs)
+			z = sorted(z)
+			labels, all_idxs = zip(*z)
+			shardsize = int(client_datasize / num_shards)
+			idxs_shard = range(int(self.num_clients * num_shards))
+			local_datas = [[] for i in range(self.num_clients)]
+			for i in range(self.num_clients):
+				rand_set = set(np.random.choice(idxs_shard, num_shards, replace=False))
+				idxs_shard = list(set(idxs_shard) - rand_set)
+				for rand in rand_set:
+					local_datas[i].extend(all_idxs[rand * shardsize:(rand + 1) * shardsize])
 
-        elif self.dist_id == 5:
-            """feature_skew_id"""
-            if not isinstance(self.train_data, TupleDataset):
-                raise RuntimeError("Support for dist_id=5 only after setting the type of self.train_data is TupleDataset")
-            Xs, IDs, Ys = self.train_data.tolist()
-            self.num_clients = len(set(IDs))
-            local_datas = [[] for _ in range(self.num_clients)]
-            for did in range(len(IDs)):
-                local_datas[IDs[did]].append(did)
+		elif self.dist_id == 4:
+			pass
 
-        elif self.dist_id == 6:
-            minv = 0
-            d_idxs = np.random.permutation(len(self.train_data))
-            while minv < self.minvol:
-                proportions = np.random.dirichlet(np.repeat(self.skewness, self.num_clients))
-                proportions = proportions / proportions.sum()
-                minv = np.min(proportions * len(self.train_data))
-            proportions = (np.cumsum(proportions) * len(d_idxs)).astype(int)[:-1]
-            local_datas  = np.split(d_idxs, proportions)
-        return local_datas
+		elif self.dist_id == 5:
+			"""feature_skew_id"""
+			if not isinstance(self.train_data, TupleDataset):
+				raise RuntimeError("Support for dist_id=5 only after setting the type of self.train_data is TupleDataset")
+			Xs, IDs, Ys = self.train_data.tolist()
+			self.num_clients = len(set(IDs))
+			local_datas = [[] for _ in range(self.num_clients)]
+			for did in range(len(IDs)):
+				local_datas[IDs[did]].append(did)
 
-    def local_holdout(self, local_datas, rate=0.8, shuffle=False):
-        """split each local dataset into train data and valid data according the rate."""
-        train_cidxs = []
-        valid_cidxs = []
-        for local_data in local_datas:
-            if shuffle:
-                np.random.shuffle(local_data)
-            k = int(len(local_data) * rate)
-            train_cidxs.append(local_data[:k])
-            valid_cidxs.append(local_data[k:])
-        return train_cidxs, valid_cidxs
+		elif self.dist_id == 6:
+			minv = 0
+			d_idxs = np.random.permutation(len(self.train_data))
+			while minv < self.minvol:
+				proportions = np.random.dirichlet(np.repeat(self.skewness, self.num_clients))
+				proportions = proportions / proportions.sum()
+				minv = np.min(proportions * len(self.train_data))
+			proportions = (np.cumsum(proportions) * len(d_idxs)).astype(int)[:-1]
+			local_datas  = np.split(d_idxs, proportions)
+		
+		elif self.dist_id == 11:
+			"""IID division by users in fedRec"""
+			local_datas = [[] for _ in range(self.num_clients)]
+			user_idxs = np.random.permutation(self.user_num)
+			user_idxs_split = np.array_split(user_idxs, self.num_clients)
+			self.local_user_idxs = [arr.tolist() for arr in user_idxs_split]
+			user_client_dict = {}
+			for client_id in range(len(self.local_user_idxs)):
+				for user in self.local_user_idxs[client_id]:
+					user_client_dict[str(user)] = client_id
+			# randomly disjoin train data
+			d_idxs = np.random.permutation(len(self.train_data))
+			for idx in d_idxs:
+				user = self.train_data[idx][0]
+				local_datas[user_client_dict[str(user)]].append(idx)
+    			
+		elif self.dist_id == 12:
+			# 1 user per client
+			local_datas = [[] for _ in range(self.num_clients)]
+			user_idxs = np.random.permutation(self.user_num)
+			user_idxs = user_idxs[:self.num_clients]
+			# split users to client
+			user_idxs_split = np.array_split(user_idxs, self.num_clients)
+			self.local_user_idxs = [arr.tolist() for arr in user_idxs_split]
+			user_client_dict = {}
+			# import pdb; pdb.set_trace()
+			for client_id in range(len(self.local_user_idxs)):
+				for user in self.local_user_idxs[client_id]:
+					user_client_dict[str(user)] = client_id
+			# randomly disjoin train data
+			d_idxs = np.random.permutation(len(self.train_data))
+			for idx in d_idxs:
+				user = self.train_data[idx][0]
+				if user not in user_idxs:
+					continue
+				local_datas[user_client_dict[str(user)]].append(idx)
+			# import pdb; pdb.set_trace()
+		return local_datas
 
-    def save_info(self):
-        info = {
-            'benchmark': self.benchmark,  # name of the dataset
-            'dist': self.dist_id,  # type of the partition way
-            'skewness': self.skewness,  # hyper-parameter for controlling the degree of niid
-            'num-clients': self.num_clients,  # numbers of all the clients
-        }
-        # save info.json
-        with open(os.path.join(self.taskpath, 'info.json'), 'w') as outf:
-            ujson.dump(info, outf)
+	def local_holdout(self, local_datas, rate=0.8, shuffle=False):
+		"""split each local dataset into train data and valid data according the rate."""
+		train_cidxs = []
+		valid_cidxs = []
+		for local_data in local_datas:
+			if shuffle:
+				np.random.shuffle(local_data)
+			k = int(len(local_data) * rate)
+			train_cidxs.append(local_data[:k])
+			valid_cidxs.append(local_data[k:])
+		return train_cidxs, valid_cidxs
 
-    def convert_data_for_saving(self):
-        """Convert self.train_data and self.test_data to list that can be stored as .json file and the converted dataset={'x':[], 'y':[]}"""
-        pass
+	def save_info(self):
+		info = {
+			'benchmark': self.benchmark,  # name of the dataset
+			'dist': self.dist_id,  # type of the partition way
+			'skewness': self.skewness,  # hyper-parameter for controlling the degree of niid
+			'num-clients': self.num_clients,  # numbers of all the clients
+		}
+		# save info.json
+		with open(os.path.join(self.taskpath, 'info.json'), 'w') as outf:
+			ujson.dump(info, outf)
 
-    def XYData_to_json(self, train_cidxs, valid_cidxs):
-        self.convert_data_for_saving()
-        # save federated dataset
-        feddata = {
-            'store': 'XY',
-            'client_names': self.cnames,
-            'dtest': self.test_data
+	def convert_data_for_saving(self):
+		"""Convert self.train_data and self.test_data to list that can be stored as .json file and the converted dataset={'x':[], 'y':[]}"""
+		pass
 
-        }
-        for cid in range(self.num_clients):
-            feddata[self.cnames[cid]] = {
-                'dtrain':{
-                    'x':[self.train_data['x'][did] for did in train_cidxs[cid]], 'y':[self.train_data['y'][did] for did in train_cidxs[cid]]
-                },
-                'dvalid':{
-                    'x':[self.train_data['x'][did] for did in valid_cidxs[cid]], 'y':[self.train_data['y'][did] for did in valid_cidxs[cid]]
-                }
-            }
-        with open(os.path.join(self.taskpath, 'data.json'), 'w') as outf:
-            ujson.dump(feddata, outf)
-        return
+	def XYData_to_json(self, train_cidxs, valid_cidxs):
+		# self.convert_data_for_saving()
+		# save federated dataset
+		feddata = {
+			'store': 'XY',
+			'client_names': self.cnames,
+			'dtrain': self.train_data,
+			'dtest': self.test_data,
+			'dbackdoor': self.removal_data,
+			'users_per_client': self.local_user_idxs,
+			'user_num': int(self.user_num),
+			'item_num': int(self.item_num),
+			'train_mat': self.train_mat
+		}
+		# import pdb; pdb.set_trace()
+		for cid in range(self.num_clients):
+			feddata[self.cnames[cid]] = {
+				'client_train': [self.train_data[did] for did in train_cidxs[cid]]
+			}
+		with open(os.path.join(self.taskpath, 'data.json'), 'w') as outf:
+			ujson.dump(feddata, outf)
+		# import pdb; pdb.set_trace()
+		return
 
-    def IDXData_to_json(self, train_cidxs, valid_cidxs):
-        if self.datasrc ==None:
-            raise RuntimeError("Attr datasrc not Found. Please define it in __init__() before calling IndexData_to_json")
-        feddata = {
-            'store': 'IDX',
-            'client_names': self.cnames,
-            'dtest': [i for i in range(len(self.test_data))],
-            'datasrc': self.datasrc
-        }
-        for cid in range(self.num_clients):
-            feddata[self.cnames[cid]] = {
-                'dtrain': train_cidxs[cid],
-                'dvalid': valid_cidxs[cid]
-            }
-        with open(os.path.join(self.taskpath, 'data.json'), 'w') as outf:
-            ujson.dump(feddata, outf)
-        return
+	def IDXData_to_json(self, train_cidxs, valid_cidxs):
+		if self.datasrc ==None:
+			raise RuntimeError("Attr datasrc not Found. Please define it in __init__() before calling IndexData_to_json")
+		feddata = {
+			'store': 'IDX',
+			'client_names': self.cnames,
+			'dtest': [i for i in range(len(self.test_data))],
+			'datasrc': self.datasrc
+		}
+		for cid in range(self.num_clients):
+			feddata[self.cnames[cid]] = {
+				'dtrain': train_cidxs[cid],
+				'dvalid': valid_cidxs[cid]
+			}
+		with open(os.path.join(self.taskpath, 'data.json'), 'w') as outf:
+			ujson.dump(feddata, outf)
+		return
 
 class BasicTaskCalculator:
 
-    _OPTIM = None
+	_OPTIM = None
 
-    def __init__(self, device):
-        self.device = device
-        self.lossfunc = None
-        self.DataLoader = None
+	def __init__(self, device):
+		self.device = device
+		self.lossfunc = None
+		self.DataLoader = None
 
-    def data_to_device(self, data):
-        raise NotImplementedError
+	def data_to_device(self, data):
+		raise NotImplementedError
 
-    def get_loss(self):
-        raise NotImplementedError
+	def get_loss(self):
+		raise NotImplementedError
 
-    def get_evaluation(self):
-        raise NotImplementedError
+	def get_evaluation(self):
+		raise NotImplementedError
 
-    def get_data_loader(self, data, batch_size = 64):
-        return NotImplementedError
+	def get_data_loader(self, data, batch_size = 64):
+		return NotImplementedError
+	# def generate_set(self):
+	#     raise NotImplementedError
 
-    def test(self):
-        raise NotImplementedError
+	def test(self):
+		raise NotImplementedError
 
-    def get_optimizer(self, name="sgd", model=None, lr=0.1, weight_decay=0, momentum=0):
-        # if self._OPTIM == None:
-        #     raise RuntimeError("TaskCalculator._OPTIM Not Initialized.")
-        if name.lower() == 'sgd':
-            return torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
-        elif name.lower() == 'adam':
-            return torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=weight_decay, amsgrad=True)
-        else:
-            raise RuntimeError("Invalid Optimizer.")
+	def get_optimizer(self, name="sgd", model=None, lr=0.1, weight_decay=0, momentum=0):
+		# if self._OPTIM == None:
+		#     raise RuntimeError("TaskCalculator._OPTIM Not Initialized.")
+		if name.lower() == 'sgd':
+			return torch.optim.SGD(model.parameters(), lr=lr, momentum=momentum, weight_decay=weight_decay)
+		elif name.lower() == 'adam':
+			return torch.optim.Adam(filter(lambda p: p.requires_grad, model.parameters()), lr=lr, weight_decay=weight_decay, amsgrad=True)
+		else:
+			raise RuntimeError("Invalid Optimizer.")
 
-    @classmethod
-    def setOP(cls, OP):
-        cls._OPTIM = OP
+	@classmethod
+	def setOP(cls, OP):
+		cls._OPTIM = OP
 
 class ClassifyCalculator(BasicTaskCalculator):
-    def __init__(self, device):
-        super(ClassifyCalculator, self).__init__(device)
-        self.num_classes = 10
-        self.lossfunc = torch.nn.CrossEntropyLoss()
-        self.lossfunc_Dir = DirichletLoss(num_classes= self.num_classes, annealing_step= 10, device= device)
-        self.lossMSE = torch.nn.MSELoss()
-        self.DataLoader = DataLoader
+	def __init__(self, device):
+		super(ClassifyCalculator, self).__init__(device)
+		self.num_classes = 10
+		# self.lossfunc = torch.nn.CrossEntropyLoss()
+		# self.lossfunc_Dir = DirichletLoss(num_classes= self.num_classes, annealing_step= 10, device= device)
+		# self.lossMSE = torch.nn.MSELoss()
+		self.DataLoader = DataLoader
 
-    def get_loss(self, model, data, epoch, device=None):
-        tdata = self.data_to_device(data, device)
-        outputs = model(tdata[0]) # batchsize * num_class
-        y = one_hot_embedding(tdata[1], self.num_classes)
-        loss = self.lossfunc(outputs, tdata[1])
-        ## check nan
-        temp = copy.copy(loss)
-        if np.isnan(temp.cpu().detach().numpy()):
-            import pdb; pdb.set_trace()
-        # loss = self.lossMSE(outputs, tdata[1].float())
-        # loss = self.lossfunc_Dir(outputs, y.float(), epoch)
-        ## compute uncertainty
-        evidence = F.relu(outputs)
-        alpha = evidence + 1
-        # print(alpha)
-        u = self.num_classes / torch.sum(alpha, dim=1, keepdim=True)
-        unc = torch.sum(u)
-        return loss, unc
+	# def generate_set(self, data, test_data):
+	#     test_set = defaultdict(dict)
+	#     for entry in test_data:
+	#         user, item, rating = entry
+	#         if user not in data.user or item not in data.item:
+	#             continue
+	#         test_set[user][item] = rating
+	#     return test_set
 
-    @torch.no_grad()
-    def get_evaluation(self, model, data):
-        tdata = self.data_to_device(data)
-        outputs = model(tdata)
-        y_pred = outputs.data.max(1, keepdim=True)[1]
-        correct = y_pred.eq(tdata[1].data.view_as(y_pred)).long().cpu().sum()
-        return (1.0 * correct / len(tdata[1])).item()
+	@torch.no_grad()
+	def get_evaluation(self, model, data):
+		tdata = self.data_to_device(data)
+		outputs = model(tdata)
+		y_pred = outputs.data.max(1, keepdim=True)[1]
+		correct = y_pred.eq(tdata[1].data.view_as(y_pred)).long().cpu().sum()
+		return (1.0 * correct / len(tdata[1])).item()
 
-    @torch.no_grad()
-    def test(self, model, data, device=None):
-        """Metric = Accuracy"""
-        tdata = self.data_to_device(data, device)
-        model = model.to(device)
-        outputs = model(tdata[0])
-        loss = self.lossfunc(outputs, tdata[-1])
-        y_pred = outputs.data.max(1, keepdim=True)[1]
-        correct = y_pred.eq(tdata[1].data.view_as(y_pred)).long().cpu().sum()
-        return (1.0 * correct / len(tdata[1])).item(), loss.item()
+	@torch.no_grad()
+	def test(self, model, test_loader, top_k, users_test=None):
+		def hit(gt_item, pred_items):
+			if gt_item in pred_items:
+				return 1
+			return 0
 
-    def data_to_device(self, data, device=None):
-        if device is None:
-            return data[0].to(self.device), data[1].to(self.device)
-        else:
-            return data[0].to(device), data[1].to(device)
 
-    def get_data_loader(self, dataset, batch_size=64, shuffle=True, droplast=False): # shuffle = True
-        def seed_worker():
-            worker_seed = 0
-            numpy.random.seed(worker_seed)
-            random.seed(worker_seed)
-        g = torch.Generator()
-        g.manual_seed(0) # 0
-        if self.DataLoader == None:
-            raise NotImplementedError("DataLoader Not Found.")
-        return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast, worker_init_fn=seed_worker, generator=g)
-        # if self.DataLoader == None:
-        #     raise NotImplementedError("DataLoader Not Found.")
-        # return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast)
-    
+		def ndcg(gt_item, pred_items):
+			if gt_item in pred_items:
+				index = pred_items.index(gt_item)
+				return np.reciprocal(np.log2(index+2))
+			return 0
+		
+		HR, NDCG = [], []
+		if users_test == None:
+			for user, item_i, item_j in test_loader:
+				user = user.cuda()
+				item_i = item_i.cuda()
+				item_j = item_j.cuda() # not useful when testing
+				
+				output = model((user, item_i, item_j))
+				indices = model.handle_test(output, top_k)
+				# _, indices = torch.topk(prediction_i, top_k)
+				recommends = torch.take(
+						item_i, indices).cpu().numpy().tolist()
+
+				gt_item = item_i[0].item()
+				HR.append(hit(gt_item, recommends))
+				NDCG.append(ndcg(gt_item, recommends))
+		else:
+			for user, item_i, item_j in test_loader:
+				if user[0].item() not in users_test:
+					continue
+				user = user.cuda()
+				item_i = item_i.cuda()
+				item_j = item_j.cuda() # not useful when testing
+				
+				# prediction_i, prediction_j = model((user, item_i, item_j))
+				# _, indices = torch.topk(prediction_i, top_k)
+				output = model((user, item_i, item_j))
+				indices = model.handle_test(output, top_k)
+				recommends = torch.take(
+						item_i, indices).cpu().numpy().tolist()
+
+				gt_item = item_i[0].item()
+				HR.append(hit(gt_item, recommends))
+				NDCG.append(ndcg(gt_item, recommends))
+		return np.mean(HR), np.mean(NDCG)
+
+	def data_to_device(self, data, device=None):
+		if device is None:
+			return data[0].to(self.device), data[1].to(self.device), data[2].to(self.device)
+		else:
+			return data[0].to(device), data[1].to(device), data[2].to(device)
+
+	def get_loss(self, model, data, option, device=None):
+		tdata = self.data_to_device(data, device)
+		output = model(tdata)
+		# prediction_i, prediction_j = model(tdata[0], tdata[1], tdata[2])
+		# loss = - (prediction_i - prediction_j).sigmoid().log().sum()
+		loss = model.handle_loss(output, option)
+		return loss
+
+	def get_data_loader(self, dataset, batch_size=64, shuffle=True, droplast=False): # shuffle = True
+		def seed_worker():
+			worker_seed = 0
+			numpy.random.seed(worker_seed)
+			random.seed(worker_seed)
+		g = torch.Generator()
+		g.manual_seed(0) # 0
+		if self.DataLoader == None:
+			raise NotImplementedError("DataLoader Not Found.")
+		return DataLoader(dataset, batch_size=batch_size, shuffle=shuffle, drop_last=droplast, worker_init_fn=seed_worker, generator=g)
+		
+	
 ## Bang Nguyen Trong
-## Evidential Deep Learning to Quantify Classification Uncertainty
-class DirichletLoss(nn.Module):
-    def __init__(self, num_classes, annealing_step, device):
-        super(DirichletLoss, self).__init__()
-        self.num_classes = num_classes
-        self.annealing_step = annealing_step
-        self.device = device
-        
-    def forward(self, output, target, epoch_num):
-        return edl_mse_loss(output, target, epoch_num, self.num_classes, self.annealing_step, self.device)
 
 class BasicTaskReader:
-    def __init__(self, taskpath=''):
-        self.taskpath = taskpath
+	def __init__(self, taskpath=''):
+		self.taskpath = taskpath
 
-    def read_data(self):
-        """
-            Reading the spilted dataset from disk files and loading data into the class 'LocalDataset'.
-            This algorithm should read three types of data from the processed task:
-                train_sets = [client1_train_data, ...] where each item is an instance of 'LocalDataset'
-                valid_sets = [client1_valid_data, ...] where each item is an instance of 'LocalDataset'
-                test_set = test_dataset
-            Return train_sets, valid_sets, test_set, client_names
-        """
-        pass
+	def read_data(self):
+		"""
+			Reading the spilted dataset from disk files and loading data into the class 'LocalDataset'.
+			This algorithm should read three types of data from the processed task:
+				train_sets = [client1_train_data, ...] where each item is an instance of 'LocalDataset'
+				valid_sets = [client1_valid_data, ...] where each item is an instance of 'LocalDataset'
+				test_set = test_dataset
+			Return train_sets, valid_sets, test_set, client_names
+		"""
+		pass
 
 class XYTaskReader(BasicTaskReader):
-    def __init__(self, taskpath=''):
-        super(XYTaskReader, self).__init__(taskpath)
+	def __init__(self, taskpath=''):
+		super(XYTaskReader, self).__init__(taskpath)
 
-    def read_data(self):
-        with open(os.path.join(self.taskpath, 'data.json'), 'r') as inf:
-            feddata = ujson.load(inf)
-        test_data = XYDataset(feddata['dtest']['x'], feddata['dtest']['y'])
-        train_datas = [XYDataset(feddata[name]['dtrain']['x'], feddata[name]['dtrain']['y']) for name in feddata['client_names']]
-        valid_datas = [XYDataset(feddata[name]['dvalid']['x'], feddata[name]['dvalid']['y']) for name in feddata['client_names']]
-        
-        ## read attack data
-        with open(os.path.join(self.taskpath, 'attack.json'), 'r') as inf:
-            feddata = ujson.load(inf)
-        # test_data_attack = XYDataset(feddata['dtest']['x'], feddata['dtest']['y'])
-        backtask_data = XYDataset(feddata['dbackdoor']['x'], feddata['dbackdoor']['y'])
-        train_datas_attack = [XYDataset(feddata[name]['dtrain']['x'], feddata[name]['dtrain']['y']) for name in feddata['client_names']]
-        # valid_datas_attack = [XYDataset(feddata[name]['dvalid']['x'], feddata[name]['dvalid']['y']) for name in feddata['client_names']]
-        
-        return train_datas, train_datas_attack, valid_datas, test_data, backtask_data, feddata['client_names']
+	def read_data(self, num_ng, model_type):
+		with open(os.path.join(self.taskpath, 'data.json'), 'r') as inf:
+			feddata = ujson.load(inf)
+		# test_data = feddata['dtest']
+		clients_config = None
+		if model_type == 'BPR':
+			train_info = {
+				'user_num': feddata['user_num'],
+				'item_num': feddata['item_num']
+				# 'adj_dict': feddata['train_mat']
+			}
+			
+			clients_config = []
+			for name in feddata['client_names']:
+				c_conf = {
+					'user_num': feddata['user_num'],
+					'item_num': feddata['item_num']
+				}
+				clients_config.append(c_conf)
+				
+			train_datas = [BPRData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
+			test_data = BPRData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
+			backdoor_data = BPRData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
+		elif model_type == 'NCF':
+			train_info = {
+				'user_num': feddata['user_num'],
+				'item_num': feddata['item_num']
+				# 'adj_dict': feddata['train_mat']
+			}
+			
+			clients_config = []
+			for name in feddata['client_names']:
+				c_conf = {
+					'user_num': feddata['user_num'],
+					'item_num': feddata['item_num']
+				}
+				clients_config.append(c_conf)
+				
+			train_datas = [NCFData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
+			test_data = NCFData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
+			backdoor_data = NCFData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
+		elif model_type == 'LightGCN':
+			train_info = {
+				'user_num': feddata['user_num'],
+				'item_num': feddata['item_num'],
+				'training_data': feddata['dtrain'],
+				# 'adj_dict': feddata['train_mat']
+			}
+			clients_config = []
+			for name in feddata['client_names']:
+				c_conf = {
+					'user_num': feddata['user_num'],
+					'item_num': feddata['item_num'],
+					'training_data': feddata[name]['client_train'],
+				}
+				clients_config.append(c_conf)
+				
+			train_datas = [GCNData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
+			test_data = GCNData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
+			backdoor_data = GCNData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
+		else:
+			raise TypeError('Not exist model with name {}'.format(model_type))
+		return train_datas, test_data, backdoor_data, feddata['users_per_client'], train_info, clients_config, feddata['client_names']
 
 class IDXTaskReader(BasicTaskReader):
-    def __init__(self, taskpath=''):
-        super(IDXTaskReader, self).__init__(taskpath)
+	def __init__(self, taskpath=''):
+		super(IDXTaskReader, self).__init__(taskpath)
 
-    def read_data(self):
-        with open(os.path.join(self.taskpath, 'data.json'), 'r') as inf:
-            feddata = ujson.load(inf)
-        DS = getattr(importlib.import_module(feddata['datasrc']['lib']), feddata['datasrc']['class_name'])
-        arg_strings = '(' + ','.join(feddata['datasrc']['args'])
-        train_args = arg_strings + ', train=True)'
-        test_args = arg_strings + ', train=False)'
-        DS.SET_DATA(eval(feddata['datasrc']['class_name'] + train_args))
-        DS.SET_DATA(eval(feddata['datasrc']['class_name'] + test_args), key='TEST')
-        test_data = IDXDataset(feddata['dtest'], key='TEST')
-        train_datas = [IDXDataset(feddata[name]['dtrain']) for name in feddata['client_names']]
-        valid_datas = [IDXDataset(feddata[name]['dvalid']) for name in feddata['client_names']]
-        return train_datas, valid_datas, test_data, feddata['client_names']
+	def read_data(self):
+		with open(os.path.join(self.taskpath, 'data.json'), 'r') as inf:
+			feddata = ujson.load(inf)
+		DS = getattr(importlib.import_module(feddata['datasrc']['lib']), feddata['datasrc']['class_name'])
+		arg_strings = '(' + ','.join(feddata['datasrc']['args'])
+		train_args = arg_strings + ', train=True)'
+		test_args = arg_strings + ', train=False)'
+		DS.SET_DATA(eval(feddata['datasrc']['class_name'] + train_args))
+		DS.SET_DATA(eval(feddata['datasrc']['class_name'] + test_args), key='TEST')
+		test_data = IDXDataset(feddata['dtest'], key='TEST')
+		train_datas = [IDXDataset(feddata[name]['dtrain']) for name in feddata['client_names']]
+		valid_datas = [IDXDataset(feddata[name]['dvalid']) for name in feddata['client_names']]
+		return train_datas, valid_datas, test_data, feddata['client_names']
 
-class XYDataset(Dataset):
-    def __init__(self, X=[], Y=[], totensor = True):
-        """ Init Dataset with pairs of features and labels/annotations.
-        XYDataset transforms data that is list\array into tensor.
-        The data is already loaded into memory before passing into XYDataset.__init__()
-        and thus is only suitable for benchmarks with small size (e.g. CIFAR10, MNIST)
-        Args:
-            X: a list of features
-            Y: a list of labels with the same length of X
-        """
-        if not self._check_equal_length(X, Y):
-            raise RuntimeError("Different length of Y with X.")
-        #"Vu Viet Bach modify XYDataset in benchmark/toolkits.py"
-        # Begin change
-        # force totensor equal true
-        totensor = True
-        # End change
-        if totensor:
-            try:
-                self.X = torch.tensor(X)
-                self.Y = torch.tensor(Y)
-            except:
-                raise RuntimeError("Failed to convert input into torch.Tensor.")
-        else:
-            self.X = X
-            self.Y = Y
-        # Begin change
-        # transform = transforms.Compose([
-        #     transforms.RandomHorizontalFlip(),
-        #     transforms.Normalize((0.1307, ), (0.3081,))]
-        # )
-        # self.X = transform(self.X)
-        # End change
-        self.all_labels = list(set(self.tolist()[1]))
+class BPRData(Dataset):
+	def __init__(self, features, 
+				num_item, train_mat=None, num_ng=0, is_training=None):
+		super(BPRData, self).__init__()
+		""" Note that the labels are only useful when training, we thus 
+			add them in the ng_sample() function.
+		"""
+		self.features = features
+		self.num_item = num_item
+		self.train_mat = train_mat
+		self.num_ng = num_ng
+		self.is_training = is_training
+		self.user_items = self._get_user_items()
 
-    def __len__(self):
-        return len(self.Y)
+	def _get_user_items(self):
+		user_items = {}
+		for user, item in self.features:
+			if user not in user_items:
+				user_items[user] = []
+			user_items[user].append(item)
+		return user_items
 
-    def __getitem__(self, item):
-        return self.X[item], self.Y[item]
+	def get_user_items(self):
+		return self.user_items
 
-    def tolist(self):
-        if not isinstance(self.X, torch.Tensor):
-            return self.X, self.Y
-        return self.X.tolist(), self.Y.tolist()
+	def ng_sample(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([u, i, j])
 
-    def _check_equal_length(self, X, Y):
-        return len(X)==len(Y)
+	def __len__(self):
+		return self.num_ng * len(self.features) if \
+				self.is_training else len(self.features)
 
-    def get_all_labels(self):
-        return self.all_labels
+	def __getitem__(self, idx):
+		features = self.features_fill if \
+				self.is_training else self.features
+
+		user = features[idx][0]
+		item_i = features[idx][1]
+		item_j = features[idx][2] if \
+				self.is_training else features[idx][1]
+		return user, item_i, item_j 
+
+class NCFData(Dataset):
+	def __init__(self, features, 
+				num_item, train_mat=None, num_ng=0, is_training=None):
+		super(NCFData, self).__init__()
+		""" Note that the labels are only useful when training, we thus 
+			add them in the ng_sample() function.
+		"""
+		self.features_ps = features
+		self.num_item = num_item
+		self.train_mat = train_mat
+		self.num_ng = num_ng
+		self.is_training = is_training
+		self.labels = [0 for _ in range(len(features))]
+		
+	def ng_sample(self):
+		assert self.is_training, 'no need to sampling when testing'
+		
+		self.features_ng = []
+		for x in self.features_ps:
+			u = x[0]
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
+					j = np.random.randint(self.num_item)
+				self.features_ng.append([u, j])
+
+		labels_ps = [1 for _ in range(len(self.features_ps))]
+		labels_ng = [0 for _ in range(len(self.features_ng))]
+
+		self.features_fill = self.features_ps + self.features_ng
+		self.labels_fill = labels_ps + labels_ng
+
+	def __len__(self):
+		return (self.num_ng + 1) * len(self.labels)
+
+	def __getitem__(self, idx):
+		features = self.features_fill if self.is_training \
+					else self.features_ps
+		labels = self.labels_fill if self.is_training \
+					else self.labels
+
+		user = features[idx][0]
+		item = features[idx][1]
+		label = labels[idx]
+		return user, item ,label
+
+class GCNData(Dataset):
+	def __init__(self, features, 
+				num_item, train_mat=None, num_ng=0, is_training=None):
+		super(GCNData, self).__init__()
+		""" Note that the labels are only useful when training, we thus 
+			add them in the ng_sample() function.
+		"""
+		self.features = features
+		self.num_item = num_item
+		self.train_mat = train_mat
+		self.num_ng = num_ng
+		self.is_training = is_training
+
+	def ng_sample(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([u, i, j])
+
+	def __len__(self):
+		return self.num_ng * len(self.features) if \
+				self.is_training else len(self.features)
+
+	def __getitem__(self, idx):
+		features = self.features_fill if \
+				self.is_training else self.features
+
+		user = features[idx][0]
+		item_i = features[idx][1]
+		item_j = features[idx][2] if \
+				self.is_training else features[idx][1]
+		return user, item_i, item_j 
 
 class IDXDataset(Dataset):
-    # The source dataset that can be indexed by IDXDataset
-    _DATA = {'TRAIN': None,'TEST': None}
+	# The source dataset that can be indexed by IDXDataset
+	_DATA = {'TRAIN': None,'TEST': None}
 
-    def __init__(self, idxs, key='TRAIN'):
-        """Init dataset with 'src_data' and a list of indexes that are used to position data in 'src_data'"""
-        if not isinstance(idxs, list):
-            raise RuntimeError("Invalid Indexes")
-        self.idxs = idxs
-        self.key = key
+	def __init__(self, idxs, key='TRAIN'):
+		"""Init dataset with 'src_data' and a list of indexes that are used to position data in 'src_data'"""
+		if not isinstance(idxs, list):
+			raise RuntimeError("Invalid Indexes")
+		self.idxs = idxs
+		self.key = key
 
-    @classmethod
-    def SET_DATA(cls, dataset, key = 'TRAIN'):
-        cls._DATA[key] = dataset
+	@classmethod
+	def SET_DATA(cls, dataset, key = 'TRAIN'):
+		cls._DATA[key] = dataset
 
-    @classmethod
-    def ADD_KEY_TO_DATA(cls, key, value = None):
-        if key==None:
-            raise RuntimeError("Empty key when calling class algorithm IDXData.ADD_KEY_TO_DATA")
-        cls._DATA[key]=value
+	@classmethod
+	def ADD_KEY_TO_DATA(cls, key, value = None):
+		if key==None:
+			raise RuntimeError("Empty key when calling class algorithm IDXData.ADD_KEY_TO_DATA")
+		cls._DATA[key]=value
 
-    def __getitem__(self, item):
-        idx = self.idxs[item]
-        return self._DATA[self.key][idx]
+	def __getitem__(self, item):
+		idx = self.idxs[item]
+		return self._DATA[self.key][idx]
 
 class TupleDataset(Dataset):
-    def __init__(self, X1=[], X2=[], Y=[], totensor=True):
-        if totensor:
-            try:
-                self.X1 = torch.tensor(X1)
-                self.X2 = torch.tensor(X2)
-                self.Y = torch.tensor(Y)
-            except:
-                raise RuntimeError("Failed to convert input into torch.Tensor.")
-        else:
-            self.X1 = X1
-            self.X2 = X2
-            self.Y = Y
+	def __init__(self, X1=[], X2=[], Y=[], totensor=True):
+		if totensor:
+			try:
+				self.X1 = torch.tensor(X1)
+				self.X2 = torch.tensor(X2)
+				self.Y = torch.tensor(Y)
+			except:
+				raise RuntimeError("Failed to convert input into torch.Tensor.")
+		else:
+			self.X1 = X1
+			self.X2 = X2
+			self.Y = Y
 
-    def __getitem__(self, item):
-        return self.X1[item], self.X2[item], self.Y[item]
+	def __getitem__(self, item):
+		return self.X1[item], self.X2[item], self.Y[item]
 
-    def __len__(self):
-        return len(self.Y)
+	def __len__(self):
+		return len(self.Y)
 
-    def tolist(self):
-        if not isinstance(self.X1, torch.Tensor):
-            return self.X1, self.X2, self.Y
-        return self.X1.tolist(), self.X2.tolist(), self.Y.tolist()
+	def tolist(self):
+		if not isinstance(self.X1, torch.Tensor):
+			return self.X1, self.X2, self.Y
+		return self.X1.tolist(), self.X2.tolist(), self.Y.tolist()
