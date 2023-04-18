@@ -60,11 +60,11 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"R{}_P{:.2f}_alpha{}".format(
+									"FedAttack_R{}_P{:.2f}_alpha{}_clean{}".format(
 										option['num_rounds'],
 										option['proportion'],
-										self.alpha
-										# option['clean_model']
+										self.alpha,
+										option['clean_model']
 									),
 									'record')
 		self.unlearn_term = None
@@ -109,29 +109,29 @@ class Server():
 		#  Process Unlearning
 
 		# start algorithm
-		# if self.option['clean_model'] == 0:
-		# 	# save grads
-		# 	self.process_grad_each_user(models, t)
-		# 	# find attack_clients
-		# 	attack_clients = []
-		# 	for cid in self.selected_clients:
-		# 		if cid in self.option['attacker']:
-		# 			attack_clients.append(cid)
-		# 	# compute beta for this round
-		# 	self.update_beta()
-		# 	# # unlearning
-		# 	if len(attack_clients) >= 1:
-		# 		# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
-		# 		round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
-		# 		# unlearn
-		# 		if t >= self.option['num_rounds'] - 5:
-		# 			logger.time_start('unlearning time')
-		# 			self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
-		# 			self.unlearn_time = logger.time_end('unlearning time')
+		if self.option['clean_model'] == 2:
+			# save grads
+			self.process_grad_original(models, t)
+			# find attack_clients
+			attack_clients = []
+			for cid in self.selected_clients:
+				if cid in self.option['attacker']:
+					attack_clients.append(cid)
+			# compute beta for this round
+			self.update_beta()
+			# # unlearning
+			if len(attack_clients) >= 1:
+				# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
+				round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
+				# unlearn
+				if t >= self.option['num_rounds'] - 5:
+					logger.time_start('unlearning time')
+					self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
+					self.unlearn_time = logger.time_end('unlearning time')
 
 		# import pdb; pdb.set_trace()
-		# if t >= self.option['num_rounds'] - 5:
-		#     self.save_models(t, models, self.unlearn_time)
+		if t >= self.option['num_rounds'] - 5:
+			self.save_models(t, models, self.unlearn_time)
 
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
@@ -140,24 +140,37 @@ class Server():
 		return
 
 	def save_models(self, round_num, models, unlearn_time):
-		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 0:
+		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 2:
 			# aggregate
 			temp_model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
 			# model clean with algo3
 			clean_model = temp_model + self.unlearn_term
-			test_unlearn, backdoor_unlearn = self.test(model= clean_model)
+			# test_unlearn, backdoor_unlearn = self.test(model= clean_model)
 			## clean metric
-			test_clean, test_backdoor = self.test(model= temp_model)
+			# test_clean, test_backdoor = self.test(model= temp_model)
+   
+			# test on clients
+			client_test_metrics, client_backdoor_metrics = self.test_on_clients(self.current_round, clean_model)
+			# compute HR and NDCG for test
+			HR = 0.0
+			NDCG = 0.0
+			for metric in client_test_metrics:
+				HR = HR + metric[0]
+				NDCG = NDCG + metric[1]
+			mean_hr = float(HR)/len(client_test_metrics)
+			mean_ndcg = float(NDCG)/len(client_test_metrics)
 			# log
 			save_logs = {
 				"selected_clients": self.selected_clients,
 				"models": models,
 				"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
 				"server_model": self.model,
-				"accuracy": [test_clean, test_backdoor],
+				# "accuracy": [test_clean, test_backdoor],
 				"unlearn_term_algo3": self.unlearn_term,
 				"unlearn_time": unlearn_time,
-				"accuracy_unlearn": [test_unlearn, backdoor_unlearn]
+				"HR_on_clients": mean_hr,
+				"NDCG_on_clients": mean_ndcg
+				# "accuracy_unlearn": [test_unlearn, backdoor_unlearn]
 			}
 
 			pickle.dump(save_logs,
@@ -165,7 +178,7 @@ class Server():
 						pickle.HIGHEST_PROTOCOL)
 		print("Save  ", round_num)
 
-	def process_grad(self, models, round_id):
+	def process_grad_original(self, models, round_id):
 		## self.model : global model before update
 		## models[cid] : model of client cid at round t
 
@@ -173,48 +186,60 @@ class Server():
 		grads_this_round = {}
 		for idx in range(len(self.selected_clients)):
 			cid = self.selected_clients[idx]
-			M_v = (models[idx] - self.model).to('cpu')
-			for param in M_v.parameters(): param.requires_grad = False
-			norms_item = torch.norm(M_v.embed_item.weight, dim=1)
-			alpha = 0.5
-			topk_values, topk_indices = torch.topk(norms_item, int(alpha * M_v.embed_item.weight.shape[0]))
-			not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
-			M_v.embed_item.weight[not_topk_indices, :] = 0
-			grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
+			grads_this_round[str(cid)] = (self.model - models[idx]).to('cpu') 
 
 		self.grads_all_round.append(grads_this_round)
+  
+	# def process_grad(self, models, round_id):
+	# 	## self.model : global model before update
+	# 	## models[cid] : model of client cid at round t
 
-	def process_grad_each_user(self, models, round_id):
-		## self.model : global model before update
-		## models[cid] : model of client cid at round t
+	# 	## grad save as dict: {'cid' : grad}
+	# 	grads_this_round = {}
+	# 	for idx in range(len(self.selected_clients)):
+	# 		cid = self.selected_clients[idx]
+	# 		M_v = (models[idx] - self.model).to('cpu')
+	# 		for param in M_v.parameters(): param.requires_grad = False
+	# 		norms_item = torch.norm(M_v.embed_item.weight, dim=1)
+	# 		alpha = 0.5
+	# 		topk_values, topk_indices = torch.topk(norms_item, int(alpha * M_v.embed_item.weight.shape[0]))
+	# 		not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
+	# 		M_v.embed_item.weight[not_topk_indices, :] = 0
+	# 		grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
 
-		## grad save as dict: {'cid' : grad}
-		grads_this_round = {}
-		for idx in range(len(self.selected_clients)):
-			cid = self.selected_clients[idx]
-			M_v = (models[idx] - self.model).to('cpu')
-			user_items = self.clients[idx].train_data.get_user_items()
-			topk_indices = []
-			alpha = 0.1
-			count_idx = 0
-			for param in M_v.parameters(): param.requires_grad = False
-			for u in user_items:
-				count_idx += 1
-				if count_idx > 1:
-					import pdb
-					pdb.set_trace()
-				M_v_user = M_v.embed_item.weight[user_items[u]]
-				norms_item = torch.norm(M_v_user, dim=1)
-				indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
-				try:
-					topk_indices.extend(list(np.array(user_items[u])[indices]))
-				except:
-					topk_indices.extend([np.array(user_items[u])[indices].tolist()]) # co 1 index
-			not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), torch.tensor(topk_indices))
-			M_v.embed_item.weight[not_topk_indices, :] = 0
-			grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
+	# 	self.grads_all_round.append(grads_this_round)
 
-		self.grads_all_round.append(grads_this_round)
+	# def process_grad_each_user(self, models, round_id):
+	# 	## self.model : global model before update
+	# 	## models[cid] : model of client cid at round t
+
+	# 	## grad save as dict: {'cid' : grad}
+	# 	grads_this_round = {}
+	# 	for idx in range(len(self.selected_clients)):
+	# 		cid = self.selected_clients[idx]
+	# 		M_v = (models[idx] - self.model).to('cpu')
+	# 		user_items = self.clients[idx].train_data.get_user_items()
+	# 		topk_indices = []
+	# 		alpha = 0.1
+	# 		count_idx = 0
+	# 		for param in M_v.parameters(): param.requires_grad = False
+	# 		for u in user_items:
+	# 			count_idx += 1
+	# 			if count_idx > 1:
+	# 				import pdb
+	# 				pdb.set_trace()
+	# 			M_v_user = M_v.embed_item.weight[user_items[u]]
+	# 			norms_item = torch.norm(M_v_user, dim=1)
+	# 			indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
+	# 			try:
+	# 				topk_indices.extend(list(np.array(user_items[u])[indices]))
+	# 			except:
+	# 				topk_indices.extend([np.array(user_items[u])[indices].tolist()]) # co 1 index
+	# 		not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), torch.tensor(topk_indices))
+	# 		M_v.embed_item.weight[not_topk_indices, :] = 0
+	# 		grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
+
+	# 	self.grads_all_round.append(grads_this_round)
 
 	def update_beta(self):
 		sum_vol = 0.0
@@ -360,9 +385,10 @@ class Server():
 				c.set_learning_rate(self.lr)
 
 	def sample(self, t):
+		# import pdb; pdb.set_trace()
 		self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
 		##
-		if self.option['clean_model'] == 0:
+		if self.option['clean_model'] == 0 or self.option['clean_model'] == 2:
 			selected_clients = self.fixed_selected_clients[t]
 		elif self.option['clean_model'] == 1:
 			selected_clients = []
@@ -372,7 +398,7 @@ class Server():
 		else:
 			raise Exception("Invalid value for attribute clean_model")
 		# selected_clients = [10]
-		selected_clients = [i for i in range(self.num_clients)]
+		# selected_clients = [i for i in range(1, self.num_clients)]
 		return selected_clients
 
 	def update_models(self, atk_clients, models):
@@ -417,7 +443,7 @@ class Server():
 			p = [pk/sump for pk in p]
 			return fmodule._model_sum([model_k * pk for model_k, pk in zip(models, p)])
 
-	def test_on_clients(self, round):
+	def test_on_clients(self, round, server_model = None):
 		"""
 		Validate accuracies and losses on clients' local datasets
 		:param
@@ -429,10 +455,18 @@ class Server():
 		"""
 		test_metrics = []
 		backdoor_metrics = []
-		for c in self.clients:
-			test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor)
-			test_metrics.append(test_acc)
-			backdoor_metrics.append(backdoor_acc)
+		if self.option['clean_model'] == 0:
+			for c in self.clients:
+				test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor, server_model)
+				test_metrics.append(test_acc)
+				backdoor_metrics.append(backdoor_acc)
+		else: 
+			for idx in range(self.num_clients):
+				if idx in self.option['attacker']:
+					continue
+				test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
+				test_metrics.append(test_acc)
+				backdoor_metrics.append(backdoor_acc)
 		return test_metrics, backdoor_metrics
 
 	def test(self, model=None):
@@ -483,7 +517,15 @@ class Client():
 		self.topN = option['topN']
 		self.model = model
 		# system setting
-		# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
+		# self.malicious_users = [5330,4759,5792,2474,2258,186,219,4522,5974,516,5351,3507,3620,2748,3637,4739,832,772,3109,4623,3877,5666,4653,3612,1418,3604,3661,4465,3788,954,2759,4587,2014,4679,452,76,4176,3113,2702,3980,2653,1264,3764,780,898,1774,181,5477,1348,5348,3014,5172,5363,764,80,5337,3745,2447,2071,5931]
+		self.malicious_users = [3590, 3261, 5789, 5972, 2909, 5857, 4905, 2582, 3, 4868, 5396, 1500, 4235, 5591, 3573, 2744, 5880, 345, 1320, 715, 1628, 2878, 146, 3666, 1343, 2176, 651, 4689, 4123, 2623, 4900, 5174, 4975, 4996, 907, 4759, 5771, 2372, 4791, 129, 4166, 2256, 3748, 5432, 396, 727, 1209, 1307, 2807, 2431, 4611, 4744, 2618, 3074, 3489, 1228, 121, 895, 1968, 4543, 2659, 1615, 4382, 5144, 4604, 3891, 737, 2445, 1658, 2429, 3871, 3997, 156, 6030, 1283, 1267, 5067, 1461, 3491, 3611, 5601, 2516, 3717, 1038, 394, 1375, 930, 1161, 1322, 2204, 4296, 5219, 5147, 1379, 4520, 4379, 906, 3735, 4299, 2759, 4121, 696, 4132,
+								4335, 817, 1181, 4861, 1843, 5751, 931, 2504, 4922, 4186, 2303, 405, 2435, 1879, 1837, 209, 4500, 1593, 1767, 134, 1831, 3020, 3164, 3420, 1350, 1739, 3277, 4540, 857, 5116, 5451, 3633, 2762, 2848, 5697, 2639, 471, 2900, 1291, 2679, 3605, 2615, 3909, 2544, 371, 5858, 1703, 4938, 2724, 4188, 3372, 5552, 5657, 1124, 2226, 1872, 4879, 4941, 612, 1183, 425, 6003, 682, 983, 3069, 1216, 3988, 747, 2106, 433, 4090, 4572, 3457, 5018, 4581, 2350, 234, 1871, 2945, 3826, 4483, 1360, 753, 4454, 4645, 5288, 2378, 1883, 3384, 3129, 5834, 3883, 799, 5398, 5845, 2664, 3819, 2651, 549, 858, 829, 4002, 3709, 
+								4285, 2223, 1034, 2882, 5624, 1917, 5420, 5956, 3193, 3361, 1047, 2064, 6014, 1273, 2098, 698, 2670, 1336, 5026, 3828, 2476, 14, 1222, 4622, 5952, 2336, 5799, 5970, 1987, 4018, 3474, 810, 5820, 2500, 71, 1956, 2723, 5813, 3371, 5265, 2563, 959, 3443, 1277, 4528, 132, 5338, 1420, 2855, 270, 1674, 705,
+								5704, 5746, 1346, 2795, 3179, 4925, 3318, 1870, 2938, 4665, 728, 2318, 89, 605, 3703, 4567, 1028, 2638, 3459, 3107, 2084, 1684, 5388, 964, 5967, 4984, 2419, 3858, 2515, 2872, 4213, 4972, 4468, 976, 1770, 3014, 2820, 846, 1558, 4287, 5790, 4746, 4317, 1566, 5886, 1289, 4067, 4651, 2053, 1246, 16, 5579, 1066, 55, 5399, 4825, 2179, 573, 3810, 1110, 3239, 410, 5622, 5521, 3738, 5987, 4014, 3104, 2102, 1568, 4580, 912, 5917, 104, 2002, 1176, 3902, 1392, 2743, 5095, 1458, 3068, 1697, 4136, 1326, 5021, 4564, 1249, 5618, 1035, 1284, 4648, 4313, 4486, 1394, 813, 1132, 481, 5882, 4109, 535, 3127, 5298,
+								4393, 3960, 2456, 1962, 1223, 2778, 627, 3332, 4955, 1653, 3669, 762, 2545, 202, 680, 268, 3452, 3145, 361, 1764, 5604, 1206, 3839, 3557, 3554, 830, 897, 5097, 3756, 879, 5946, 688, 197, 4025, 4680, 1826, 860, 3333, 828, 1193, 5911, 366, 1417, 385, 1076, 2276, 981, 2912, 806, 2835, 4776, 3964, 4337, 5559, 3617, 2713, 655, 3636, 766, 480, 4872, 5367, 1431, 5966, 3218, 4718, 1439, 487, 1574, 1089, 1768, 3351, 5655, 3594, 1252, 902, 4064, 5794, 2436, 1189, 767, 583, 3409, 3571, 2503, 2915, 447, 113, 3417, 4369, 3310, 3965, 2186, 1915, 3035, 2218, 3102, 4292, 1303, 1576, 4708, 2678, 2752, 2634, 4518, 
+								945, 1180, 1657, 1705, 4573, 1693, 5560, 4405, 4956, 3095, 1395, 4053, 3978, 3392, 5942, 5941, 5742, 4654, 4589, 1022, 5593, 5277, 4184, 3153, 2367, 5963, 1935, 2532, 5317, 2090, 2687, 1348, 5407, 4334, 1276, 528, 664, 3899, 2585, 5465, 3188, 4576, 5594, 5030, 5386, 2698, 1700, 1168, 2800, 3579, 
+								3799, 4131, 5977, 2365, 1415, 5119, 1159, 5171, 1733, 5628, 1995, 1398, 1190, 2067, 2339, 3512, 3598, 1036, 439, 3379, 4593, 4566, 20, 2417, 1390, 3094, 4709, 672, 360, 4135, 4522, 3941, 288, 5424, 3254, 1810, 1489, 102, 2165, 2240, 1517, 3680, 3627, 3640, 4218, 2430, 4036, 865, 2637, 4818, 1557, 3456, 1152, 2371, 5646, 1762, 3206, 3601, 690, 5098, 4547, 314, 5958, 4902, 3156, 2826, 3093, 949, 1308, 1763, 1776, 4212, 2604, 3908, 5537, 2677, 5110, 2930, 5483, 4442, 4849, 2405, 3667, 1302, 2730, 5220, 199, 4621]
+  		# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
@@ -501,7 +543,7 @@ class Client():
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 		for iter in range(self.epochs):
 			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample(self.negative_sampling)
+			data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users)
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
@@ -509,7 +551,7 @@ class Client():
 				optimizer.step()
 		return
 
-	def test(self, test_data, test_backdoor):
+	def test(self, test_data, test_backdoor, server_model = None):
 		"""
 		Evaluate the model with local data (e.g. training data or validating data).
 		:param
@@ -519,7 +561,11 @@ class Client():
 			eval_metric: task specified evaluation metric
 			loss: task specified loss
 		"""
-		model=self.model
+		if server_model == None: model=self.model
+		else:
+			model = copy.deepcopy(self.model)
+			fmodule._model_merge_(model, server_model)
+   
 		if test_data:
 			model.eval()
 			data_loader = self.calculator.get_data_loader(test_data, batch_size=100, shuffle=False)
@@ -564,7 +610,6 @@ class Client():
 		round_num = self.unpack(svr_pkg)[1]
 
 		# data = self.unpack(svr_pkg)[2]
-		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
 		self.train(self.model, round_num)

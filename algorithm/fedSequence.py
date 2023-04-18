@@ -487,7 +487,7 @@ class Client():
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-	def train(self, model, round_num):
+	def sequentially_train(self, model, round_num):
 		"""
 		Standard local training procedure. Train the transmitted model with local training dataset.
 		:param
@@ -499,14 +499,15 @@ class Client():
 		print(self.datavol)
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
-		for iter in range(self.epochs):
-			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample(self.negative_sampling)
-			for batch_id, batch_data in enumerate(data_loader):
-				model.zero_grad()
-				loss = self.calculator.get_loss(model, batch_data, self.option)
-				loss.backward()
-				optimizer.step()
+		for user in self.users_set:
+			for iter in range(self.epochs):
+				# import pdb; pdb.set_trace()
+				data_loader.dataset.ng_sample_by_user(user)
+				for batch_id, batch_data in enumerate(data_loader):
+					model.zero_grad()
+					loss = self.calculator.get_loss(model, batch_data, self.option)
+					loss.backward()
+					optimizer.step()
 		return
 
 	def test(self, test_data, test_backdoor):
@@ -567,7 +568,7 @@ class Client():
 		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, round_num)
+		self.sequentially_train(self.model, round_num)
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 

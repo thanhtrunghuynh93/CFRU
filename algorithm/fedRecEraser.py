@@ -7,6 +7,7 @@ import pickle
 import os
 import utils.fflow as flw
 import torch
+import time
 import json
 class Server():
 	def __init__(self, option, model, clients, test_data = None, backtask_data = None):
@@ -60,11 +61,11 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"R{}_P{:.2f}_alpha{}".format(
+									"FedEraser_R{}_P{:.2f}_alpha{}_clean{}".format(
 										option['num_rounds'],
 										option['proportion'],
-										self.alpha
-										# option['clean_model']
+										self.alpha,
+										option['clean_model']
 									),
 									'record')
 		self.unlearn_term = None
@@ -467,6 +468,13 @@ class Client():
 		# create local dataset
 		self.train_data = train_data
 		self.users_set = users_set
+		self.neg_items = []
+		self.grads_all_round = []
+		# positive items
+		self.positive_items = [] # note that 1 client only has 1 user
+		for user in users_set:
+			self.positive_items = self.positive_items + self.train_data.get_pos_items(user)
+		self.positive_items = list(set(self.positive_items))
 		# self.valid_data = valid_data
 		self.option = option
 		self.datavol = len(self.train_data)
@@ -487,27 +495,59 @@ class Client():
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-	def train(self, model, round_num):
+	def train(self, model, server_model):
 		"""
 		Standard local training procedure. Train the transmitted model with local training dataset.
 		:param
-			model: the global model
+			model: the global model 
 			round_num:
 		:return
 		"""
 		model.train()
 		print(self.datavol)
+		neg_items_this_round = set()
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 		for iter in range(self.epochs):
 			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample(self.negative_sampling)
+			neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
+		# save neg_items this round
+		neg_items_this_round = list(neg_items_this_round)
+		self.neg_items.append(neg_items_this_round)
+		start_time = time.time()
+		self.process_grad(server_model, self.neg_items[-1])
+		print("process_grad: ", time.time() - start_time)
 		return
+
+	def process_grad(self, server_model, negative_items):
+		all_selected_items = self.positive_items + negative_items
+		## grad save as dict: {'cid' : grad}
+		# grads_this_round = {}
+		# for idx in range(len(self.selected_clients)):
+		# cid = self.selected_clients[idx]
+		M_v = (self.model - server_model).to('cpu')
+		for param in M_v.parameters(): param.requires_grad = False
+		# get all embeddings from pos and neg items
+		M_v_user = M_v.embed_item.weight[all_selected_items]
+		# get l2 norm
+		norms_item = torch.norm(M_v_user, dim=1)
+		alpha = 0.5
+		topk_indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
+		# get topk selected items
+		# all param not in topk -> 0
+		not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
+		M_v.embed_item.weight[not_topk_items, :] = 0
+		# require grad = True
+		for param in M_v.parameters(): param.requires_grad = True
+		# save updates
+		# self.grads_all_round.append(copy.deepcopy(M_v))
+		# update important weights
+		self.model = server_model + M_v.cuda()
 
 	def test(self, test_data, test_backdoor):
 		"""
@@ -562,12 +602,13 @@ class Client():
 		"""
 		model = self.unpack(svr_pkg)[0]
 		round_num = self.unpack(svr_pkg)[1]
-
 		# data = self.unpack(svr_pkg)[2]
+		start_time = time.time()
 		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
+		print("semi_hard_ng_sample: ", time.time() - start_time)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, round_num)
+		self.train(self.model, model)
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 

@@ -170,7 +170,9 @@ class BasicTaskGen:
 		9: 'concept and feature skew and balance',
 		10: 'concept and feature skew and imbalance',
 		11: 'iid division by users (fedRec)',
-		12: 'non-iid division by users (fedRec)'
+		12: 'randomly 1 user per client',
+		13: 'top 100 correlation user selected to 100 clients',
+		14: 'top 100 by correlation of pairs'
 	}
 	_TYPE_DATASET = ['2DImage', '3DImage', 'Text', 'Sequential', 'Graph', 'Tabular']
 
@@ -436,6 +438,84 @@ class DefaultTaskGen(BasicTaskGen):
 					continue
 				local_datas[user_client_dict[str(user)]].append(idx)
 			# import pdb; pdb.set_trace()
+		elif self.dist_id == 13:
+			# 1 user per client
+			correlation_matrix = np.zeros((self.user_num, self.user_num))
+			for user_i in range(self.user_num):
+				for user_j in range(user_i + 1, self.user_num):
+					pos_item_i = set(self.train_mat[user_i])
+					pos_item_j = set(self.train_mat[user_j])
+					corr = len(pos_item_i.intersection(pos_item_j)) / len(pos_item_i.union(pos_item_j))
+					correlation_matrix[user_i, user_j] = corr
+					correlation_matrix[user_j, user_i] = corr
+			# Calculate row-wise similarities
+			similarities = np.sum(correlation_matrix, axis=1)
+
+			# Sort indices of rows by similarity in descending order
+			sorted_indices = np.argsort(similarities)[::-1]
+
+			# Select top 100 sets with highest similarity
+			user_idxs = sorted_indices[:self.num_clients]
+			local_datas = [[] for _ in range(self.num_clients)]
+			# split users to client
+			user_idxs_split = np.array_split(user_idxs, self.num_clients)
+			self.local_user_idxs = [arr.tolist() for arr in user_idxs_split]
+			user_client_dict = {}
+			# import pdb; pdb.set_trace()
+			for client_id in range(len(self.local_user_idxs)):
+				for user in self.local_user_idxs[client_id]:
+					user_client_dict[str(user)] = client_id
+			# randomly disjoin train data
+			d_idxs = np.random.permutation(len(self.train_data))
+			for idx in d_idxs:
+				user = self.train_data[idx][0]
+				if user not in user_idxs:
+					continue
+				local_datas[user_client_dict[str(user)]].append(idx)
+			# import pdb; pdb.set_trace()
+		elif self.dist_id == 14:
+			#get top highest correlation by pairs
+			# 1 user per client
+			correlation_matrix = np.zeros((self.user_num, self.user_num))
+			for user_i in range(self.user_num):
+				for user_j in range(user_i + 1, self.user_num):
+					pos_item_i = set(self.train_mat[user_i])
+					pos_item_j = set(self.train_mat[user_j])
+					corr = len(pos_item_i.intersection(pos_item_j)) / len(pos_item_i.union(pos_item_j))
+					correlation_matrix[user_i, user_j] = corr
+					correlation_matrix[user_j, user_i] = corr
+
+			# get indices of values in descending order
+			indices = np.argsort(correlation_matrix.ravel())[::-1]
+			# get 2D-indices
+			rows, cols = np.unravel_index(indices, correlation_matrix.shape)
+			# Select top 100 sets with highest similarity
+			user_idxs = set()
+			index = 0
+			while len(user_idxs) < self.num_clients:
+				user_idxs.add(rows[index])
+				if len(user_idxs) < self.num_clients:
+					user_idxs.add(cols[index])
+				index = index + 1
+			if len(user_idxs) != self.num_clients:
+				raise ValueError('Number of users not fit with num_clients')
+			user_idxs = list(user_idxs)
+			local_datas = [[] for _ in range(self.num_clients)]
+			# split users to client
+			user_idxs_split = np.array_split(user_idxs, self.num_clients)
+			self.local_user_idxs = [arr.tolist() for arr in user_idxs_split]
+			user_client_dict = {}
+			# import pdb; pdb.set_trace()
+			for client_id in range(len(self.local_user_idxs)):
+				for user in self.local_user_idxs[client_id]:
+					user_client_dict[str(user)] = client_id
+			# randomly disjoin train data
+			d_idxs = np.random.permutation(len(self.train_data))
+			for idx in d_idxs:
+				user = self.train_data[idx][0]
+				if user not in user_idxs:
+					continue
+				local_datas[user_client_dict[str(user)]].append(idx)
 		return local_datas
 
 	def local_holdout(self, local_datas, rate=0.8, shuffle=False):
@@ -764,6 +844,7 @@ class BPRData(Dataset):
 		self.train_mat = train_mat
 		self.num_ng = num_ng
 		self.is_training = is_training
+		self.len_data = self.num_ng * len(self.features) if self.is_training else len(self.features)
 		self.user_items = self._get_user_items()
 
 	def _get_user_items(self):
@@ -777,7 +858,10 @@ class BPRData(Dataset):
 	def get_user_items(self):
 		return self.user_items
 
-	def ng_sample(self):
+	def get_pos_items(self, user):
+		return self.train_mat[str(user)]
+
+	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
 		for x in self.features:
@@ -787,15 +871,86 @@ class BPRData(Dataset):
 				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
+    
+	def ng_sample_by_user(self, user):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		pos_items = self.train_mat[str(user)]
+		for item in pos_items:
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in pos_items:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([user, item, j])
+		self.len_data = len(self.features_fill)
+ 
+	def ng_sample(self, negative_samples):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			list_neg = np.random.choice(negative_samples[str(u)], size=self.num_ng, replace=False)
+			for j in list_neg:
+				self.features_fill.append([u, i, j])
+		return list(list_neg)
+
+	def ng_sample_fedatk(self, model, topK, malicious_users):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		malicious_users_in_client = []
+		# self.malicious_features = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			if u in malicious_users:
+				malicious_users_in_client.append(u)
+				# self.malicious_features.append(x)
+				continue
+			# negative sampling for normal users
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([u, i, j])
+		## 
+		malicious_users_in_client = set(malicious_users_in_client)
+		for user in malicious_users_in_client:
+			top_items, bottom_items = model.predict_user(user, topK)
+			# torch.manual_seed(42)
+			perm1 = torch.randperm(len(top_items))
+			perm2 = torch.randperm(len(bottom_items))
+			for x, y in zip(top_items[perm1], bottom_items[perm2]):
+				self.features_fill.append([user, y.item(), x.item()])
+		random.shuffle(self.features_fill)
+		self.len_data = len(self.features_fill)
+    
+	def semi_hard_ng_sample(self, model, list_user):
+		import time
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		neg_sampling_user = {}
+		# get candidate pool
+		for u in list_user:
+			V_neg_k = model.get_semi_hard_negative_items(u, pos_items=self.train_mat[str(u)], R=0.5)
+			N = int(self.num_item * 0.5)
+			# print("Hi{}".format(N))
+			B = 0.5
+			index_neg_sampling = np.random.choice(V_neg_k, size=int(N*B), replace=False)
+			neg_sampling_user[str(u)] = index_neg_sampling
+		return neg_sampling_user
+		# for x in self.features:
+		# 	u, i = x[0], x[1]
+		# 	for j in neg_sampling_user[str(u)]:
+		# 		self.features_fill.append([u, i, j])
 
 	def __len__(self):
-		return self.num_ng * len(self.features) if \
-				self.is_training else len(self.features)
+		return self.len_data
+		# return self.num_ng * len(self.features) if \
+		# 		self.is_training else len(self.features)
 
 	def __getitem__(self, idx):
 		features = self.features_fill if \
 				self.is_training else self.features
-
+		# if len(features[idx]) < 3: import pdb; pdb.set_trace()
 		user = features[idx][0]
 		item_i = features[idx][1]
 		item_j = features[idx][2] if \

@@ -60,7 +60,7 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"R{}_P{:.2f}_alpha{}".format(
+									"FlipGrads_R{}_P{:.2f}_alpha{}_mergeItemOnly".format(
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha
@@ -109,29 +109,29 @@ class Server():
 		#  Process Unlearning
 
 		# start algorithm
-		# if self.option['clean_model'] == 0:
-		# 	# save grads
-		# 	self.process_grad_each_user(models, t)
-		# 	# find attack_clients
-		# 	attack_clients = []
-		# 	for cid in self.selected_clients:
-		# 		if cid in self.option['attacker']:
-		# 			attack_clients.append(cid)
-		# 	# compute beta for this round
-		# 	self.update_beta()
-		# 	# # unlearning
-		# 	if len(attack_clients) >= 1:
-		# 		# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
-		# 		round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
-		# 		# unlearn
-		# 		if t >= self.option['num_rounds'] - 5:
-		# 			logger.time_start('unlearning time')
-		# 			self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
-		# 			self.unlearn_time = logger.time_end('unlearning time')
+		if self.option['clean_model'] == 2:
+			# save grads
+			self.process_grad_original(models, t)
+			# find attack_clients
+			attack_clients = []
+			for cid in self.selected_clients:
+				if cid in self.option['attacker']:
+					attack_clients.append(cid)
+			# compute beta for this round
+			self.update_beta()
+			# # unlearning
+			if len(attack_clients) >= 1:
+				# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
+				round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
+				# unlearn
+				if t >= self.option['num_rounds'] - 5:
+					logger.time_start('unlearning time')
+					self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
+					self.unlearn_time = logger.time_end('unlearning time')
 
 		# import pdb; pdb.set_trace()
-		# if t >= self.option['num_rounds'] - 5:
-		#     self.save_models(t, models, self.unlearn_time)
+		if t >= self.option['num_rounds'] - 5:
+			self.save_models(t, models, self.unlearn_time)
 
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
@@ -140,30 +140,55 @@ class Server():
 		return
 
 	def save_models(self, round_num, models, unlearn_time):
-		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 0:
+		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 2:
 			# aggregate
 			temp_model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
 			# model clean with algo3
 			clean_model = temp_model + self.unlearn_term
-			test_unlearn, backdoor_unlearn = self.test(model= clean_model)
+			# test_unlearn, backdoor_unlearn = self.test(model= clean_model)
 			## clean metric
-			test_clean, test_backdoor = self.test(model= temp_model)
+			# test_clean, test_backdoor = self.test(model= temp_model)
+   
+			# test on clients
+			client_test_metrics, client_backdoor_metrics = self.test_on_clients(self.current_round, clean_model)
+			# compute HR and NDCG for test
+			HR = 0.0
+			NDCG = 0.0
+			for metric in client_test_metrics:
+				HR = HR + metric[0]
+				NDCG = NDCG + metric[1]
+			mean_hr = float(HR)/len(client_test_metrics)
+			mean_ndcg = float(NDCG)/len(client_test_metrics)
 			# log
 			save_logs = {
 				"selected_clients": self.selected_clients,
 				"models": models,
 				"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
 				"server_model": self.model,
-				"accuracy": [test_clean, test_backdoor],
+				# "accuracy": [test_clean, test_backdoor],
 				"unlearn_term_algo3": self.unlearn_term,
 				"unlearn_time": unlearn_time,
-				"accuracy_unlearn": [test_unlearn, backdoor_unlearn]
+				"HR_on_clients": mean_hr,
+				"NDCG_on_clients": mean_ndcg
+				# "accuracy_unlearn": [test_unlearn, backdoor_unlearn]
 			}
 
 			pickle.dump(save_logs,
 						open(os.path.join(self.path_save, "history" + str(round_num) + ".pkl"), 'wb'),
 						pickle.HIGHEST_PROTOCOL)
 		print("Save  ", round_num)
+
+	def process_grad_original(self, models, round_id):
+		## self.model : global model before update
+		## models[cid] : model of client cid at round t
+
+		## grad save as dict: {'cid' : grad}
+		grads_this_round = {}
+		for idx in range(len(self.selected_clients)):
+			cid = self.selected_clients[idx]
+			grads_this_round[str(cid)] = (self.model - models[idx]).to('cpu') 
+
+		self.grads_all_round.append(grads_this_round)
 
 	def process_grad(self, models, round_id):
 		## self.model : global model before update
@@ -360,9 +385,10 @@ class Server():
 				c.set_learning_rate(self.lr)
 
 	def sample(self, t):
+		# import pdb; pdb.set_trace()
 		self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
 		##
-		if self.option['clean_model'] == 0:
+		if self.option['clean_model'] == 0 or self.option['clean_model'] == 2:
 			selected_clients = self.fixed_selected_clients[t]
 		elif self.option['clean_model'] == 1:
 			selected_clients = []
@@ -372,7 +398,7 @@ class Server():
 		else:
 			raise Exception("Invalid value for attribute clean_model")
 		# selected_clients = [10]
-		selected_clients = [i for i in range(self.num_clients)]
+		# selected_clients = [i for i in range(1, self.num_clients)]
 		return selected_clients
 
 	def update_models(self, atk_clients, models):
@@ -417,7 +443,7 @@ class Server():
 			p = [pk/sump for pk in p]
 			return fmodule._model_sum([model_k * pk for model_k, pk in zip(models, p)])
 
-	def test_on_clients(self, round):
+	def test_on_clients(self, round, server_model = None):
 		"""
 		Validate accuracies and losses on clients' local datasets
 		:param
@@ -429,10 +455,18 @@ class Server():
 		"""
 		test_metrics = []
 		backdoor_metrics = []
-		for c in self.clients:
-			test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor)
-			test_metrics.append(test_acc)
-			backdoor_metrics.append(backdoor_acc)
+		if self.option['clean_model'] == 0:
+			for c in self.clients:
+				test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor, server_model)
+				test_metrics.append(test_acc)
+				backdoor_metrics.append(backdoor_acc)
+		else: 
+			for idx in range(self.num_clients):
+				if idx in self.option['attacker']:
+					continue
+				test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
+				test_metrics.append(test_acc)
+				backdoor_metrics.append(backdoor_acc)
 		return test_metrics, backdoor_metrics
 
 	def test(self, model=None):
@@ -487,7 +521,7 @@ class Client():
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-	def train(self, model, round_num):
+	def train(self, model, server_model):
 		"""
 		Standard local training procedure. Train the transmitted model with local training dataset.
 		:param
@@ -501,15 +535,18 @@ class Client():
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 		for iter in range(self.epochs):
 			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample(self.negative_sampling)
+			data_loader.dataset.ng_sample_original()
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
+		if self.name == 'Client00':
+			update_client = model - server_model
+			self.model = server_model - update_client
 		return
 
-	def test(self, test_data, test_backdoor):
+	def test(self, test_data, test_backdoor, server_model = None):
 		"""
 		Evaluate the model with local data (e.g. training data or validating data).
 		:param
@@ -519,7 +556,11 @@ class Client():
 			eval_metric: task specified evaluation metric
 			loss: task specified loss
 		"""
-		model=self.model
+		if server_model == None: model=self.model
+		else:
+			model = copy.deepcopy(self.model)
+			fmodule._model_merge_(model, server_model)
+   
 		if test_data:
 			model.eval()
 			data_loader = self.calculator.get_data_loader(test_data, batch_size=100, shuffle=False)
@@ -564,10 +605,9 @@ class Client():
 		round_num = self.unpack(svr_pkg)[1]
 
 		# data = self.unpack(svr_pkg)[2]
-		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, round_num)
+		self.train(self.model, model)
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 

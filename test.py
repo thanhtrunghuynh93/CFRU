@@ -1,20 +1,15 @@
 import torch
+import pickle
+import io
 
-# Create a tensor of shape (5, 3) with some sample weights
-weights = torch.tensor([[0.1, 0.2, 0.3],
-                        [0.4, 0.5, 0.6],
-                        [0.7, 0.8, 0.9],
-                        [1.0, 1.1, 1.2],
-                        [1.3, 1.4, 1.5]])
+class CPU_Unpickler(pickle.Unpickler):
+    def find_class(self, module, name):
+        if module == 'torch.storage' and name == '_load_from_bytes':
+            return lambda b: torch.load(io.BytesIO(b), map_location='cpu')
+        else: return super().find_class(module, name)
 
-# Define a list of indices to keep
-indices = [1, 2, 3, 4]
-
-# Create a Boolean mask indicating which indices are in the list
-mask = torch.isin(torch.arange(weights.shape[0]), indices)
-
-# Set the weights of indices not in the list to 0
-weights[~mask, :] = 0
-
-# Print the result
-print(weights)
+if __name__ == '__main__':
+    for alp in [0.03, 0.05, 0.07, 0.1, 0.3]:
+        with open('./fedtasksave/movielens1m_cnum10_dist11_skew0.0_seed0/FedAttack_R25_P0.30_alpha{}_clean2/record/history25.pkl'.format(alp), 'rb') as test_f:
+            hist = CPU_Unpickler(test_f).load()
+        print('HR: {} | NDCG: {}'.format(hist['HR_on_clients'], hist['NDCG_on_clients']))

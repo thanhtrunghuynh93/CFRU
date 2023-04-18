@@ -30,7 +30,6 @@ def read_option():
     # hyper-parameters of training in server side
     parser.add_argument('--num_rounds', help='number of communication rounds', type=int, default=20)
     
-    ## For Bach
     ## hyper-parameters of training
     parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.2) # 0.3 / 1
     parser.add_argument('--theta_delta', help='coefficient multiply with delta each round', type=float, default=1) # 0.5 / 0.8 / 1
@@ -102,6 +101,7 @@ def initialize(option):
     task_reader = getattr(importlib.import_module(bmk_core_path), 'TaskReader')(taskpath=os.path.join('fedtask', option['task']))
     client_train_datas, test_data, backdoor_data, users_per_client, data_conf, clients_config, client_names= task_reader.read_data(option['num_ng'], option['model'])
     num_clients = len(client_names)
+    # import pdb; pdb.set_trace()
     print("done")
     if users_per_client == None:
         users_per_client = [None] * num_clients
@@ -133,7 +133,7 @@ def initialize(option):
 def output_filename(option, server):
     header = "{}_".format(option["algorithm"])
     for para in server.paras_name: header = header + para + "{}_".format(option[para])
-    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}.json".format(
+    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}_alp{}.json".format(
         option['model'],
         option['embedding.size'],
         option['reg.lambda'],
@@ -142,7 +142,8 @@ def output_filename(option, server):
         option['learning_rate'],
         option['batch_size'],
         option['topN'],
-        option['seed']
+        option['seed'],
+        option['alpha']
         )
     return output_name
 
