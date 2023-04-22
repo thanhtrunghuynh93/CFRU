@@ -30,12 +30,12 @@ class MyLogger(flw.Logger):
             NDCG = NDCG + metric[1]
         self.output['client_test_accs'].append([float(HR)/len(client_test_metrics), float(NDCG)/len(client_test_metrics)])
         # compute HR and NDCG for backdoor
-        HR = 0.0
-        NDCG = 0.0
-        for metric in client_backdoor_metrics:
-            HR = HR + metric[0]
-            NDCG = NDCG + metric[1]
-        self.output['client_backdoor_accs'].append([float(HR)/len(client_backdoor_metrics), float(NDCG)/len(client_backdoor_metrics)])
+        # HR = 0.0
+        # NDCG = 0.0
+        # for metric in client_backdoor_metrics:
+        #     HR = HR + metric[0]
+        #     NDCG = NDCG + metric[1]
+        # self.output['client_backdoor_accs'].append([float(HR)/len(client_backdoor_metrics), float(NDCG)/len(client_backdoor_metrics)])
         # 
         # self.output['test_accs'].append(test_metric)
         # self.output['backdoor_accs'].append(backdoor_metric)
@@ -46,7 +46,7 @@ class MyLogger(flw.Logger):
         # print(self.output['test_accs'][-1])
         # print("Backdoor Metric:")
         # print(self.output['backdoor_accs'][-1])
-        print("Client test: main test {} | backdoor test {}".format(self.output['client_test_accs'][-1], self.output['client_backdoor_accs'][-1]))
+        print("Client test: main test {}".format(self.output['client_test_accs'][-1]))
         print("Selected clients in this round:")
         print(self.output['all_selected_clients'][-1])
 

@@ -60,7 +60,7 @@ class Server():
 
         ## code from fedavg
         self.path_save = os.path.join('fedtasksave', self.option['task'],
-                                    "R{}_P{:.2f}_alpha{}".format(
+                                    "fedBase_R{}_P{:.2f}_alpha{}".format(
                                         option['num_rounds'],
                                         option['proportion'],
                                         self.alpha
@@ -107,7 +107,7 @@ class Server():
         models = self.communicate(self.selected_clients)
 
         ##  Process Unlearning
-
+        # self.save_client_model(t, models)
         ## start algorithm
         # if self.option['clean_model'] == 0: 
         #     # save grads
@@ -138,6 +138,15 @@ class Server():
         # aggregate: pk = 1/K as default where K=len(selected_clients)
         self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
         return 
+    
+    def save_client_model(self, round_num, models):
+        save_logs = {
+            "models": models
+        }
+        pickle.dump(save_logs,
+                    open(os.path.join(self.path_save, "history" + str(round_num) + ".pkl"), 'wb'),
+                    pickle.HIGHEST_PROTOCOL)
+        print("Save  ", round_num)
 
     def save_models(self, round_num, models, unlearn_time):
         if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 0:
@@ -462,7 +471,7 @@ class Client():
         optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
         for iter in range(self.epochs):
             # import pdb; pdb.set_trace() 
-            data_loader.dataset.ng_sample()
+            data_loader.dataset.ng_sample_original()
             for batch_id, batch_data in enumerate(data_loader):
                 model.zero_grad()
                 loss = self.calculator.get_loss(model, batch_data, self.option)
@@ -488,9 +497,9 @@ class Client():
             
             ## test on backdoor data # wrong, need to fix later
             backdoor_metric = [-1, -1]
-            if test_backdoor:
-                backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
-                backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
+            # if test_backdoor:
+            #     backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
+            #     backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
             
             # return 
             return test_metric, backdoor_metric

@@ -508,20 +508,28 @@ class Client():
 		neg_items_this_round = set()
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
+		if self.option['alpha'] == -2 or self.option['alpha'] == -3:
+				neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
+		else:
+			neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample_original())
 		for iter in range(self.epochs):
 			# import pdb; pdb.set_trace()
-			neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
+			# if self.option['alpha'] == -2 or self.option['alpha'] == -3:
+			# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
+			# else:
+			# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample_original())
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
 		# save neg_items this round
-		neg_items_this_round = list(neg_items_this_round)
-		self.neg_items.append(neg_items_this_round)
-		start_time = time.time()
-		self.process_grad(server_model, self.neg_items[-1])
-		print("process_grad: ", time.time() - start_time)
+		if self.option['alpha'] == -1  or self.option['alpha'] == -3:
+			neg_items_this_round = list(neg_items_this_round)
+			self.neg_items.append(neg_items_this_round)
+			start_time = time.time()
+			self.process_grad(server_model, self.neg_items[-1])
+			print("process_grad: ", time.time() - start_time)
 		return
 
 	def process_grad(self, server_model, negative_items):
@@ -567,9 +575,9 @@ class Client():
 
 			## test on backdoor data # wrong, need to fix later
 			backdoor_metric = [-1, -1]
-			if test_backdoor:
-				backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
-				backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
+			# if test_backdoor:
+			# 	backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
+			# 	backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
 
 			# return
 			return test_metric, backdoor_metric
@@ -604,7 +612,8 @@ class Client():
 		round_num = self.unpack(svr_pkg)[1]
 		# data = self.unpack(svr_pkg)[2]
 		start_time = time.time()
-		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
+		if self.option['alpha'] == -2 or self.option['alpha'] == -3:
+			self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
 		print("semi_hard_ng_sample: ", time.time() - start_time)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)

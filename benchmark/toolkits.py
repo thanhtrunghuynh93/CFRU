@@ -864,6 +864,7 @@ class BPRData(Dataset):
 	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
+		all_neg_item = []
 		for x in self.features:
 			u, i = x[0], x[1]
 			for t in range(self.num_ng):
@@ -871,6 +872,8 @@ class BPRData(Dataset):
 				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
+				all_neg_item.append(j)
+		return list(set(all_neg_item))
     
 	def ng_sample_by_user(self, user):
 		assert self.is_training, 'no need to sampling when testing'
@@ -887,12 +890,14 @@ class BPRData(Dataset):
 	def ng_sample(self, negative_samples):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
+		all_neg_item = []
 		for x in self.features:
 			u, i = x[0], x[1]
 			list_neg = np.random.choice(negative_samples[str(u)], size=self.num_ng, replace=False)
+			all_neg_item = all_neg_item + list(list_neg)
 			for j in list_neg:
 				self.features_fill.append([u, i, j])
-		return list(list_neg)
+		return list(set(all_neg_item))
 
 	def ng_sample_fedatk(self, model, topK, malicious_users):
 		assert self.is_training, 'no need to sampling when testing'

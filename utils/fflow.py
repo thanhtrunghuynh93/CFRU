@@ -133,7 +133,7 @@ def initialize(option):
 def output_filename(option, server):
     header = "{}_".format(option["algorithm"])
     for para in server.paras_name: header = header + para + "{}_".format(option[para])
-    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}_alp{}.json".format(
+    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}_alp{}_clean{}.json".format(
         option['model'],
         option['embedding.size'],
         option['reg.lambda'],
@@ -143,7 +143,8 @@ def output_filename(option, server):
         option['batch_size'],
         option['topN'],
         option['seed'],
-        option['alpha']
+        option['alpha'],
+        option['clean_model']
         )
     return output_name
 

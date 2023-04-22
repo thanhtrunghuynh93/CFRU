@@ -60,7 +60,7 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"R{}_P{:.2f}_alpha{}".format(
+									"fedRec_R{}_P{:.2f}_alpha{}".format(
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha
@@ -105,7 +105,8 @@ class Server():
 
 		# training
 		models = self.communicate(self.selected_clients)
-
+		# addiction
+		# self.save_client_model(t, models)
 		#  Process Unlearning
 
 		# start algorithm
@@ -138,6 +139,15 @@ class Server():
 		# aggregate: pk = 1/K as default where K=len(selected_clients)
 		self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
 		return
+
+	def save_client_model(self, round_num, models):
+		save_logs = {
+			"models": models
+		}
+		pickle.dump(save_logs,
+					open(os.path.join(self.path_save, "history" + str(round_num) + ".pkl"), 'wb'),
+					pickle.HIGHEST_PROTOCOL)
+		print("Save  ", round_num)
 
 	def save_models(self, round_num, models, unlearn_time):
 		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 0:
