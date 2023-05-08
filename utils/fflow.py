@@ -13,6 +13,7 @@ import copy
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']
 optimizer_list=['SGD', 'Adam']
+attack_methods = ['fedAttack', 'fedFlipGrads']
 
 def read_option():
     parser = argparse.ArgumentParser()
@@ -23,7 +24,7 @@ def read_option():
 
     # methods of server side for sampling and aggregating
     parser.add_argument('--sample', help='methods for sampling clients', type=str, choices=sample_list, default='uniform')
-    parser.add_argument('--aggregate', help='methods for aggregating models', type=str, choices=agg_list, default='none')
+    parser.add_argument('--aggregate', help='methods for aggregating models', type=str, choices=agg_list, default='weighted_com')
     parser.add_argument('--learning_rate_decay', help='learning rate decay for the training process;', type=float, default=0.998)
     parser.add_argument('--weight_decay', help='weight decay for the training process', type=float, default=0)
     parser.add_argument('--lr_scheduler', help='type of the global learning rate scheduler', type=int, default=-1)
@@ -106,8 +107,17 @@ def initialize(option):
     if users_per_client == None:
         users_per_client = [None] * num_clients
     # init data of attackers
-    s_atk = [0]
+    if num_clients == 100:
+        s_atk = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    elif num_clients == 10:
+        s_atk = [0]
+    else:
+        raise ValueError('Not enough clients')
+    malicious_users = []
+    for cid in s_atk:
+        malicious_users = malicious_users + users_per_client[cid]
     option['attacker'] = s_atk
+    option['malicious_users'] = malicious_users
     
     # set config in fmodule
     utils.fmodule.data_conf = data_conf
@@ -133,7 +143,7 @@ def initialize(option):
 def output_filename(option, server):
     header = "{}_".format(option["algorithm"])
     for para in server.paras_name: header = header + para + "{}_".format(option[para])
-    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}_alp{}_clean{}.json".format(
+    output_name = header + "M{}_ES{}_RL{}_R{}_E{}_LR{}_B{}_top{}_seed{}_alp{}_clean{}_cap{}.json".format(
         option['model'],
         option['embedding.size'],
         option['reg.lambda'],
@@ -144,7 +154,8 @@ def output_filename(option, server):
         option['topN'],
         option['seed'],
         option['alpha'],
-        option['clean_model']
+        option['clean_model'],
+        option['capability']
         )
     return output_name
 

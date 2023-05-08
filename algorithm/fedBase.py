@@ -20,7 +20,6 @@ class Server():
         self.round = 0
         self.test_backdoor = backtask_data
         self.test_data = test_data
-        # self.test_backdoor = self.calculator.generate_set(self.data, backtask_data)
         # 
         self.eval_interval = option['eval_interval']
         self.num_threads = option['num_threads']

@@ -37,6 +37,9 @@ import importlib
 from benchmark.rec_loss import bpr_loss, l2_reg_loss
 import torchvision.transforms as transforms
 from random import shuffle,randint,choice,sample
+from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
+import concurrent
+
 
 def set_random_seed(seed=0):
 	"""Set random seed"""
@@ -887,21 +890,59 @@ class BPRData(Dataset):
 				self.features_fill.append([user, item, j])
 		self.len_data = len(self.features_fill)
  
-	def ng_sample(self, negative_samples):
+	def ng_sample_old(self, negative_samples):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
 		all_neg_item = []
 		for x in self.features:
 			u, i = x[0], x[1]
+			# original semi-hard sampling
+			# list_neg = negative_samples[str(u)]
+			# randomly select num_ng negative samples for each positive sample
 			list_neg = np.random.choice(negative_samples[str(u)], size=self.num_ng, replace=False)
 			all_neg_item = all_neg_item + list(list_neg)
 			for j in list_neg:
 				self.features_fill.append([u, i, j])
 		return list(set(all_neg_item))
 
+	def ng_sample_chunk(self, negative_samples, chunk_start, chunk_end):
+		assert self.is_training, 'no need to sampling when testing'
+		features_fill_chunk = []
+		all_neg_item = []
+		for x in self.features[chunk_start:chunk_end]:
+			u, i = x[0], x[1]
+			list_neg = np.random.choice(negative_samples[str(u)], size=self.num_ng, replace=False)
+			all_neg_item = all_neg_item + list(list_neg)
+			for j in list_neg:
+				features_fill_chunk.append([u, i, j])
+		return features_fill_chunk, list(set(all_neg_item))
+
+	def ng_sample(self, negative_samples, num_workers=16):
+		assert self.is_training, 'no need to sampling when testing'
+		
+		# Calculate the chunk size based on the number of workers
+		chunk_size = len(self.features) // num_workers
+
+		# Create a list of chunk ranges
+		chunk_ranges = [(i * chunk_size, (i + 1) * chunk_size) for i in range(num_workers)]
+		chunk_ranges[-1] = (chunk_ranges[-1][0], len(self.features))  # Make sure to include the last element
+		
+		# Use ProcessPoolExecutor to parallelize the processing
+		with ProcessPoolExecutor(max_workers=num_workers) as executor:
+			futures = [executor.submit(self.ng_sample_chunk, negative_samples, start, end) for start, end in chunk_ranges]
+			
+			results = [future.result() for future in futures]
+		
+		# Combine the results
+		self.features_fill = [item for sublist, _ in results for item in sublist]
+		all_neg_item = list(set(item for _, items in results for item in items))
+		
+		return all_neg_item
+
 	def ng_sample_fedatk(self, model, topK, malicious_users):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
+		all_neg_item = []
 		malicious_users_in_client = []
 		# self.malicious_features = []
 		for x in self.features:
@@ -916,6 +957,7 @@ class BPRData(Dataset):
 				while j in self.train_mat[str(u)]:
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
+				all_neg_item.append(j)
 		## 
 		malicious_users_in_client = set(malicious_users_in_client)
 		for user in malicious_users_in_client:
@@ -925,20 +967,25 @@ class BPRData(Dataset):
 			perm2 = torch.randperm(len(bottom_items))
 			for x, y in zip(top_items[perm1], bottom_items[perm2]):
 				self.features_fill.append([user, y.item(), x.item()])
+				#
+				all_neg_item.append(x.item())
+				all_neg_item.append(y.item())
 		random.shuffle(self.features_fill)
 		self.len_data = len(self.features_fill)
+		return list(set(all_neg_item))
     
-	def semi_hard_ng_sample(self, model, list_user):
+	def semi_hard_ng_sample_old(self, model, list_user):
 		import time
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
 		neg_sampling_user = {}
 		# get candidate pool
 		for u in list_user:
+			start_time = time.time()
 			V_neg_k = model.get_semi_hard_negative_items(u, pos_items=self.train_mat[str(u)], R=0.5)
 			N = int(self.num_item * 0.5)
 			# print("Hi{}".format(N))
-			B = 0.5
+			B = 0.05
 			index_neg_sampling = np.random.choice(V_neg_k, size=int(N*B), replace=False)
 			neg_sampling_user[str(u)] = index_neg_sampling
 		return neg_sampling_user
@@ -946,6 +993,31 @@ class BPRData(Dataset):
 		# 	u, i = x[0], x[1]
 		# 	for j in neg_sampling_user[str(u)]:
 		# 		self.features_fill.append([u, i, j])
+	def get_neg_sampling(self, u, model):
+		V_neg_k = model.get_semi_hard_negative_items(u, pos_items=self.train_mat[str(u)], R=0.5)
+		N = int(self.num_item * 0.5)
+		B = 0.05
+		index_neg_sampling = np.random.choice(V_neg_k, size=int(N * B), replace=False)
+		return str(u), index_neg_sampling
+
+	def semi_hard_ng_sample(self, model, list_user, num_workers=16):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		neg_sampling_user = {}
+
+		# Process nhanh hon Thread.
+
+		with ProcessPoolExecutor(max_workers=num_workers) as executor:
+			future_results = {executor.submit(self.get_neg_sampling, u, model): u for u in list_user}
+			for future in concurrent.futures.as_completed(future_results):
+				u = future_results[future]
+				try:
+					user, index_neg_sampling = future.result()
+					neg_sampling_user[user] = index_neg_sampling
+				except Exception as e:
+					print(f"User {u} generated an exception: {e}")
+		
+		return neg_sampling_user
 
 	def __len__(self):
 		return self.len_data

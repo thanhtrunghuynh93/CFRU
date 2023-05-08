@@ -60,11 +60,12 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"FlipGrads_R{}_P{:.2f}_alpha{}_mergeItemOnly".format(
+									"FlipGrads_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
 										option['num_rounds'],
 										option['proportion'],
-										self.alpha
-										# option['clean_model']
+										self.alpha,
+										option['clean_model'],
+										option['seed']
 									),
 									'record')
 		self.unlearn_term = None
@@ -541,7 +542,9 @@ class Client():
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
-		if self.name == 'Client00':
+		name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
+		if self.name in name_malicious_client: #== 'Client00':
+			# import pdb; pdb.set_trace()
 			update_client = model - server_model
 			self.model = server_model - update_client
 		return
