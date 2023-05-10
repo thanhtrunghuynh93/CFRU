@@ -33,7 +33,6 @@ class Server():
         # hyper-parameters during training process
         self.num_rounds = option['num_rounds']
         self.decay_rate = option['learning_rate_decay']
-        # self.clients_per_round = max(int(self.num_clients * option['proportion']), 1)
         self.lr_scheduler_type = option['lr_scheduler']
         self.current_round = -1
         # sampling and aggregating methods

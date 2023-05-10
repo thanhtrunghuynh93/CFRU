@@ -876,6 +876,7 @@ class BPRData(Dataset):
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
 				all_neg_item.append(j)
+		self.len_data = len(self.features_fill)
 		return list(set(all_neg_item))
     
 	def ng_sample_by_user(self, user):

@@ -13,7 +13,7 @@ import copy
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']
 optimizer_list=['SGD', 'Adam']
-attack_methods = ['fedAttack', 'fedFlipGrads']
+attack_methods = ['fedAttack', 'fedFlipGrads', 'none']
 
 def read_option():
     parser = argparse.ArgumentParser()
@@ -21,6 +21,7 @@ def read_option():
     parser.add_argument('--task', help='name of fedtask;', type=str, default='mnist_cnum100_dist0_skew0_seed0')
     parser.add_argument('--algorithm', help='name of algorithm;', type=str, default='fedavg')
     parser.add_argument('--model', help='name of model;', type=str, default='cnn')
+    parser.add_argument('--atk_method', help='method for poisoning global model', type=str, choices=attack_methods, default='none')
 
     # methods of server side for sampling and aggregating
     parser.add_argument('--sample', help='methods for sampling clients', type=str, choices=sample_list, default='uniform')
@@ -32,7 +33,7 @@ def read_option():
     parser.add_argument('--num_rounds', help='number of communication rounds', type=int, default=20)
     
     ## hyper-parameters of training
-    parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.2) # 0.3 / 1
+    parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.3) # 0.3 / 1
     parser.add_argument('--theta_delta', help='coefficient multiply with delta each round', type=float, default=1) # 0.5 / 0.8 / 1
     parser.add_argument('--alpha', help='coefficient multiply with epsilon (difference between grad of U and grad of W)', type=float, default=1) # 0.5 / 0.8 / 1
     ## end
@@ -70,7 +71,7 @@ def read_option():
     parser.add_argument('--capability', help="controlling the difference of local computing capability of each client", type=float, default=0)
     
     # clean or not
-    parser.add_argument('--clean_model', help='clean_model equals 1 in order to run clean model and 0 otherwise', type=int, default=0)
+    parser.add_argument('--clean_model', help='clean_model equals 1 in order to run clean model and 0 otherwise', type=int, default=2)
     
     # server gpu
     parser.add_argument('--server_gpu_id', help='server process on this gpu', type=int, default=0)

@@ -3,6 +3,7 @@ from utils import fmodule
 import copy
 from multiprocessing import Pool as ThreadPool
 from main import logger
+from tqdm import tqdm
 import pickle
 import os
 import utils.fflow as flw
@@ -56,250 +57,132 @@ class Server():
 		# top N evaluation
 		self.topN = self.option['topN']
 		# self.algo = self.option['unlearn_algorithm']
-		self.fixed_selected_clients = [[] for i in range(self.num_rounds+1)]
+		# self.fixed_selected_clients = [[] for i in range(self.num_rounds+1)]
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"FedAttack_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+									"ULEfficient_R{}_P{:.2f}_alpha{}_seed{}".format(
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
-										option['clean_model'],
 										option['seed']
 									),
 									'record')
 		self.unlearn_term = None
 		self.unlearn_time = 0
+		# Parameters for FedEfficient
+		self.if_unlearning = False
+		# self.local_epoch = self.option['num_epochs']
+		self.global_epoch = self.option['num_rounds']
+		self.forget_client_idxs = sorted(self.option['attacker'])
 		# create folder for saving model
 		print(self.path_save)
 		if not os.path.exists(self.path_save):
 			os.makedirs(self.path_save, exist_ok=True)
 
 	def run(self):
-		"""
-		Start the federated learning symtem where the global model is trained iteratively.
-		"""
-		logger.time_start('Total Time Cost')
-
-		## run()
-		for round in range(self.num_rounds+1):
+		global_model = None
+		client_models = None
+		for round in tqdm(range(self.num_rounds)):
 			print("--------------Round {}--------------".format(round))
-			logger.time_start('Time Cost')
-			self.round = round ## Get round_num
-			# federated train
-			self.iterate(round)
-			# decay learning rate
-			self.global_lr_scheduler(round)
+			self.round = round
+			_global_model, _client_models = self.iterate(round)
+			if round == self.num_rounds - 2:
+				client_models = copy.deepcopy(_client_models)
+		global_model = copy.deepcopy(_global_model)
+		logger.time_start('unlearning time')
+		w_u_i = self.unlearning(global_model, client_models)
+		self.if_unlearning = True
+		unlearn_GM, _ = self.iterate(self.num_rounds+1, w_u_i)
+		unlearn_time = logger.time_end('unlearning time')
+		eval_metric = self.test(unlearn_GM)
+		eval_metric_w = self.test(w_u_i)
+		print("Evaluate before a few training rounds: ", eval_metric_w)
+		print("Evaluate after a few training rounds: ", eval_metric)
+		self.save_models(eval_metric, unlearn_time, unlearn_GM, eval_metric_w)
+		print("------------End---------------")
+		return unlearn_GM
 
-			logger.time_end('Time Cost')
-			if logger.check_if_log(round, self.eval_interval): logger.log(self)
-
-		print("=================End==================")
-		logger.time_end('Total Time Cost')
-		# save results as .json file
-		logger.save(os.path.join('fedtask', self.option['task'], 'record', flw.output_filename(self.option, self)))
-
-	def iterate(self, t):
+	def iterate(self, t, global_model=None):
+		# sample clients: MD sampling as default but with replacement=False
 		self.selected_clients = self.sample(t)
+		attack_clients = []
+
+		for cid in self.selected_clients: 
+			if cid in self.option['attacker']:
+				attack_clients.append(cid) 
+		
 		for idx in self.selected_clients:
 			self.round_selected[idx].append(t)
 
-		# training
-		models = self.communicate(self.selected_clients)
+		models, p_coefficient = self.communicate(self.selected_clients, global_model)
 
-		#  Process Unlearning
+		self.model = self.aggregate(models, p = p_coefficient)
+		return self.model, models
+	
+	def unlearning(self, old_GMs, old_CMs):
+		global_model = copy.deepcopy(old_GMs)
+		client_models = copy.deepcopy(old_CMs)
+		
+		# forget_client = self.forget_client_idx
+		w_ref = self._cal_w_ref(global_model, client_models)
+		list_atk_model = []
+		for forget_client in self.forget_client_idxs:
+			w_u = copy.deepcopy(client_models[forget_client])
+			v = copy.deepcopy(client_models[forget_client])
+			v_state_dict = v.state_dict()
+			# model = client_models[forget_client]
+			data_loader = self.clients[forget_client].calculator.get_data_loader(self.clients[forget_client].train_data, batch_size=self.clients[forget_client].batch_size)
+			for iter in range(20):
+				data_loader.dataset.ng_sample_original()
+				for batch_id, batch_data in enumerate(data_loader):
+					temp_state_dict = w_u.state_dict()
+					w_u.zero_grad()
+					loss = self.calculator.get_loss(w_u, batch_data, self.option)
+					loss.backward()
+					params = list(w_u.parameters())
+					for i, (layer, value) in enumerate(temp_state_dict.items()):
+						if "norm" in layer:
+							continue
+						temp_state_dict[layer] += params[i].grad
+					w_u.load_state_dict(temp_state_dict)
+					for layer in w_u.state_dict().keys():
+						v_state_dict[layer] = self._l2_projection(w_u.state_dict()[layer], w_ref.state_dict()[layer])
+					w_u.load_state_dict(v_state_dict)
+			list_atk_model.append(w_u)
+		return fmodule._model_average(list_atk_model, p=[1.0/len(self.forget_client_idxs) for _ in range(len(self.forget_client_idxs))])
+	
+	def _l2_projection(self, w, w_ref, radius=3):
+		v = torch.div(w, max(radius, torch.norm(w, p=2)))
+		return torch.add(v, w_ref)
+		
+	def _cal_w_ref(self, global_model, client_models):
+		w_ref = copy.deepcopy(global_model)
+		return_state_dict = global_model.state_dict()
+		N = len(client_models)
+		for layer in return_state_dict.keys():
+			return_state_dict[layer] *= 0 
+			return_state_dict[layer] += N*global_model.state_dict()[layer] #- client_models[self.forget_client_idx].state_dict()[layer]
+			for idx in self.forget_client_idxs:
+				return_state_dict[layer] -= client_models[idx].state_dict()[layer]
+			return_state_dict[layer] /= (N - len(self.forget_client_idxs))
+		w_ref.load_state_dict(return_state_dict)
+		return w_ref
+	
+	def save_models(self, main_accuracy, unlearn_time, unlearn_model, list_eval_w):
+		# log
+		save_logs = {
+			"time": unlearn_time,
+			"unlearn_model": unlearn_model,
+			"eval_after_FLtrain": main_accuracy,
+			"eval_before_FLtrain": list_eval_w
+		}
+		pickle.dump(save_logs,
+					open(os.path.join(self.path_save, "history" + str(self.global_epoch) + ".pkl"), 'wb'),
+					pickle.HIGHEST_PROTOCOL)
+		print("Save  ", self.global_epoch)
 
-		# start algorithm
-		if self.option['clean_model'] == 2:
-			# save grads
-			self.process_grad_original(models, t)
-			# find attack_clients
-			attack_clients = []
-			for cid in self.selected_clients:
-				if cid in self.option['attacker']:
-					attack_clients.append(cid)
-			# compute beta for this round
-			self.update_beta()
-			# # unlearning
-			if len(attack_clients) >= 1:
-				# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
-				round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
-				# unlearn
-				if t >= self.option['num_rounds'] - 5:
-					logger.time_start('unlearning time')
-					self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
-					self.unlearn_time = logger.time_end('unlearning time')
-
-		# import pdb; pdb.set_trace()
-		if t >= self.option['num_rounds'] - 5:
-			self.save_models(t, models, self.unlearn_time)
-
-		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
-		if not self.selected_clients: return
-		# aggregate: pk = 1/K as default where K=len(selected_clients)
-		self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
-		return
-
-	def save_models(self, round_num, models, unlearn_time):
-		if round_num >= self.option['num_rounds'] - 5 and self.option['clean_model'] == 2:
-			# aggregate
-			temp_model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
-			# model clean with algo3
-			clean_model = temp_model + self.unlearn_term
-			# test_unlearn, backdoor_unlearn = self.test(model= clean_model)
-			## clean metric
-			# test_clean, test_backdoor = self.test(model= temp_model)
-   
-			# test on clients
-			client_test_metrics, client_backdoor_metrics = self.test_on_clients(self.current_round, clean_model)
-			# compute HR and NDCG for test
-			HR = 0.0
-			NDCG = 0.0
-			for metric in client_test_metrics:
-				HR = HR + metric[0]
-				NDCG = NDCG + metric[1]
-			mean_hr = float(HR)/len(client_test_metrics)
-			mean_ndcg = float(NDCG)/len(client_test_metrics)
-			# log
-			save_logs = {
-				"selected_clients": self.selected_clients,
-				"models": models,
-				"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
-				"server_model": self.model,
-				# "accuracy": [test_clean, test_backdoor],
-				"unlearn_term_algo3": self.unlearn_term,
-				"unlearn_time": unlearn_time,
-				"HR_on_clients": mean_hr,
-				"NDCG_on_clients": mean_ndcg
-				# "accuracy_unlearn": [test_unlearn, backdoor_unlearn]
-			}
-
-			pickle.dump(save_logs,
-						open(os.path.join(self.path_save, "history" + str(round_num) + ".pkl"), 'wb'),
-						pickle.HIGHEST_PROTOCOL)
-		print("Save  ", round_num)
-
-	def process_grad_original(self, models, round_id):
-		## self.model : global model before update
-		## models[cid] : model of client cid at round t
-
-		## grad save as dict: {'cid' : grad}
-		grads_this_round = {}
-		for idx in range(len(self.selected_clients)):
-			cid = self.selected_clients[idx]
-			grads_this_round[str(cid)] = (self.model - models[idx]).to('cpu') 
-
-		self.grads_all_round.append(grads_this_round)
-  
-	# def process_grad(self, models, round_id):
-	# 	## self.model : global model before update
-	# 	## models[cid] : model of client cid at round t
-
-	# 	## grad save as dict: {'cid' : grad}
-	# 	grads_this_round = {}
-	# 	for idx in range(len(self.selected_clients)):
-	# 		cid = self.selected_clients[idx]
-	# 		M_v = (models[idx] - self.model).to('cpu')
-	# 		for param in M_v.parameters(): param.requires_grad = False
-	# 		norms_item = torch.norm(M_v.embed_item.weight, dim=1)
-	# 		alpha = 0.5
-	# 		topk_values, topk_indices = torch.topk(norms_item, int(alpha * M_v.embed_item.weight.shape[0]))
-	# 		not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
-	# 		M_v.embed_item.weight[not_topk_indices, :] = 0
-	# 		grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
-
-	# 	self.grads_all_round.append(grads_this_round)
-
-	# def process_grad_each_user(self, models, round_id):
-	# 	## self.model : global model before update
-	# 	## models[cid] : model of client cid at round t
-
-	# 	## grad save as dict: {'cid' : grad}
-	# 	grads_this_round = {}
-	# 	for idx in range(len(self.selected_clients)):
-	# 		cid = self.selected_clients[idx]
-	# 		M_v = (models[idx] - self.model).to('cpu')
-	# 		user_items = self.clients[idx].train_data.get_user_items()
-	# 		topk_indices = []
-	# 		alpha = 0.1
-	# 		count_idx = 0
-	# 		for param in M_v.parameters(): param.requires_grad = False
-	# 		for u in user_items:
-	# 			count_idx += 1
-	# 			if count_idx > 1:
-	# 				import pdb
-	# 				pdb.set_trace()
-	# 			M_v_user = M_v.embed_item.weight[user_items[u]]
-	# 			norms_item = torch.norm(M_v_user, dim=1)
-	# 			indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
-	# 			try:
-	# 				topk_indices.extend(list(np.array(user_items[u])[indices]))
-	# 			except:
-	# 				topk_indices.extend([np.array(user_items[u])[indices].tolist()]) # co 1 index
-	# 		not_topk_indices = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), torch.tensor(topk_indices))
-	# 		M_v.embed_item.weight[not_topk_indices, :] = 0
-	# 		grads_this_round[str(cid)] = M_v #tmp_model#copy.deepcopy(tmp_model)#(self.model - models[idx]).cpu()
-
-	# 	self.grads_all_round.append(grads_this_round)
-
-	def update_beta(self):
-		sum_vol = 0.0
-		for cid in self.selected_clients:
-			sum_vol += 1.0 * self.client_vols[cid]/self.data_vol
-		self.beta.append(sum_vol)
-
-	def getAttacker_rounds(self, attackers):
-		## get list of attacked rounds
-		round_attack = set([])
-		for cid in attackers:
-			round_attack.update(self.round_selected[cid])
-		round_attack = list(round_attack)
-		round_attack.sort()
-
-		## get list of attackers of each round
-		attackers_round = [[] for round in range(len(round_attack))]
-		for idx in range(len(round_attack)):
-			for cid in attackers:
-				if round_attack[idx] in self.round_selected[cid]:
-					attackers_round[idx].append(cid)
-
-		return round_attack, attackers_round
-
-	def compute_unlearn_term(self, round_attack, attackers_round, round):
-		## Init unlearn term
-		unlearning_term = fmodule._create_new_model(self.model) * 0.0
-		alpha = - self.alpha
-		# compute beta constraint in lipschitz inequality
-		list_beta = []
-		for idx in range(len(self.beta)): # idx: round_id
-			beta = self.beta[idx]
-			if idx in round_attack:
-				for cid in attackers_round[round_attack.index(idx)]:
-					beta -= 1.0 * self.client_vols[cid]/self.data_vol
-
-			beta = beta * alpha + 1
-			list_beta.append(beta)
-
-			# compute unlearning-term
-		for idx in range(len(round_attack)):
-			round_id = round_attack[idx]
-			# compute u-term at round round_id (attack round)
-			unlearning_term = unlearning_term * list_beta[round_id]
-			for c_id in attackers_round[idx]:
-				unlearning_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[round_id][str(c_id)].to(self.model.get_device())
-				self.grads_all_round[round_id][str(c_id)].to('cpu') #.cpu()
-
-			if idx == len(round_attack) - 1: continue
-			for r_id in range(round_id + 1, round_attack[idx + 1]):
-				unlearning_term = unlearning_term * list_beta[r_id]
-		unlearning_term = unlearning_term * self.theta
-		return unlearning_term
-
-	def remove_atk(self, attackers):
-		for cid in attackers:
-			self.round_selected[cid] = []
-
-	def communicate(self, selected_clients):
+	def communicate(self, selected_clients, global_model):
 		"""
 		The whole simulating communication procedure with the selected clients.
 		This part supports for simulating the client dropping out.
@@ -312,7 +195,7 @@ class Server():
 		if self.num_threads <= 1:
 			# computing iteratively
 			for client_id in selected_clients:
-				response_from_client_id = self.communicate_with(client_id)
+				response_from_client_id = self.communicate_with(client_id, global_model)
 				packages_received_from_clients.append(response_from_client_id)
 		else:
 			# computing in parallel
@@ -323,9 +206,16 @@ class Server():
 		# count the clients not dropping
 		self.selected_clients = [selected_clients[i] for i in range(len(selected_clients)) if packages_received_from_clients[i]]
 		packages_received_from_clients = [pi for pi in packages_received_from_clients if pi]
-		return self.unpack(packages_received_from_clients)
+		models = self.unpack(packages_received_from_clients)
+		p_coef = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients]
+		if self.if_unlearning:
+			for idx in reversed(self.forget_client_idxs):
+				if idx in range(len(self.selected_clients)):
+					models.pop(idx)
+					p_coef.pop(idx)
+		return models, p_coef
 
-	def communicate_with(self, client_id):
+	def communicate_with(self, client_id, global_model):
 		"""
 		Pack the information that is needed for client_id to improve the global model
 		:param
@@ -334,12 +224,12 @@ class Server():
 			client_package: the reply from the client and will be 'None' if losing connection
 		"""
 		# package the necessary information
-		svr_pkg = self.pack(client_id)
+		svr_pkg = self.pack(client_id, global_model)
 		# listen for the client's response and return None if the client drops out
 		if self.clients[client_id].is_drop(): return None
 		return self.clients[client_id].reply(svr_pkg)
 
-	def pack(self, client_id):
+	def pack(self, client_id, global_model):
 		"""
 		Pack the necessary information for the client's local training.
 		Any operations of compression or encryption should be done here.
@@ -348,10 +238,13 @@ class Server():
 		:return
 			a dict that only contains the global model as default.
 		"""
+		if global_model:
+			model = global_model
+		else:
+			model = self.model
 		return {
-			"model" : copy.deepcopy(self.model),
-			"round" : self.round
-			# "data" : self.data
+			"model" : copy.deepcopy(model),
+			"round" : self.round,
 		}
 
 	def unpack(self, packages_received_from_clients):
@@ -387,15 +280,10 @@ class Server():
 
 	def sample(self, t):
 		# import pdb; pdb.set_trace()
-		self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
+		# self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
 		##
-		if self.option['clean_model'] == 0 or self.option['clean_model'] == 2:
-			selected_clients = self.fixed_selected_clients[t]
-		elif self.option['clean_model'] == 1:
-			selected_clients = []
-			for cid in self.fixed_selected_clients[t]:
-				if cid not in self.option['attacker']:
-					selected_clients.append(cid)
+		if self.option['clean_model'] == 2:
+			selected_clients = [i for i in range(self.num_clients)]
 		else:
 			raise Exception("Invalid value for attribute clean_model")
 		return selected_clients
@@ -453,19 +341,13 @@ class Server():
 			loss: the loss of the global model on each client's dataset
 		"""
 		test_metrics = []
-		backdoor_metrics = []
-		if self.option['clean_model'] == 0:
-			for c in self.clients:
-				test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor, server_model)
-				test_metrics.append(test_acc)
-				backdoor_metrics.append(backdoor_acc)
-		else: 
-			for idx in range(self.num_clients):
-				if idx in self.option['attacker']:
-					continue
-				test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
-				test_metrics.append(test_acc)
-				backdoor_metrics.append(backdoor_acc)
+		backdoor_metrics = [] 
+		for idx in range(self.num_clients):
+			if idx in self.option['attacker']:
+				continue
+			test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
+			test_metrics.append(test_acc)
+			backdoor_metrics.append(backdoor_acc)
 		return test_metrics, backdoor_metrics
 
 	def test(self, model=None):
@@ -476,22 +358,16 @@ class Server():
 		:return:
 			the metric and loss of the model on the test data
 		"""
-		if model==None: model=self.model
-		if self.test_data:
-			model.eval()
-			data_loader = self.calculator.get_data_loader(self.test_data, batch_size=self.option['test_num_ng']+1, shuffle=False)
-			test_metric = self.calculator.test(model, data_loader, self.topN)
-
-			## test on backdoor data # wrong, need to fix later
-			backdoor_metric = [-1, -1]
-			if self.test_backdoor:
-				backdoor_loader = self.calculator.get_data_loader(self.test_backdoor, batch_size = self.option['test_num_ng']+1, shuffle=False)
-				backdoor_metric = self.calculator.test(model, backdoor_loader, 3)
-
-			# return
-			return test_metric, backdoor_metric
-		else:
-			return -1, -1
+		client_test_metrics, client_backdoor_metrics = self.test_on_clients(self.current_round, model)
+		# compute HR and NDCG for test
+		HR = 0.0
+		NDCG = 0.0
+		for metric in client_test_metrics:
+			HR = HR + metric[0]
+			NDCG = NDCG + metric[1]
+		mean_hr = float(HR)/len(client_test_metrics)
+		mean_ndcg = float(NDCG)/len(client_test_metrics)
+		return mean_hr, mean_ndcg
 
 class Client():
 	def __init__(self, option, name='', model=None, train_data=None, users_set=None):
@@ -516,13 +392,11 @@ class Client():
 		self.topN = option['topN']
 		self.model = model
 		# system setting
-		# self.malicious_users = [5330,4759,5792,2474,2258,186,219,4522,5974,516,5351,3507,3620,2748,3637,4739,832,772,3109,4623,3877,5666,4653,3612,1418,3604,3661,4465,3788,954,2759,4587,2014,4679,452,76,4176,3113,2702,3980,2653,1264,3764,780,898,1774,181,5477,1348,5348,3014,5172,5363,764,80,5337,3745,2447,2071,5931]
-		self.malicious_users = option['malicious_users']
      	# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-	def train(self, model, round_num):
+	def train(self, model, server_model):
 		"""
 		Standard local training procedure. Train the transmitted model with local training dataset.
 		:param
@@ -535,13 +409,23 @@ class Client():
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 		for iter in range(self.epochs):
-			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users)
+			# negative sample based on attack method
+			if self.option['atk_method'] == 'fedAttack':
+				data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.option['malicious_users'])
+			else:
+				data_loader.dataset.ng_sample_original()
+			# training
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
+		if self.option['atk_method'] == 'fedFlipGrads':
+			name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
+			if self.name in name_malicious_client: #== 'Client00':
+				# import pdb; pdb.set_trace()
+				update_client = model - server_model
+				self.model = server_model - update_client
 		return
 
 	def test(self, test_data, test_backdoor, server_model = None):
@@ -605,7 +489,7 @@ class Client():
 		# data = self.unpack(svr_pkg)[2]
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, round_num)
+		self.train(self.model, model)
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 
