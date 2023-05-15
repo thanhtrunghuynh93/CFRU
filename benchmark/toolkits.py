@@ -719,6 +719,13 @@ class ClassifyCalculator(BasicTaskCalculator):
 		# loss = - (prediction_i - prediction_j).sigmoid().log().sum()
 		loss = model.handle_loss(output, option)
 		return loss
+	
+	def get_kd_loss(self, student_model, teacher_model, data, option, device=None):
+		tdata = self.data_to_device(data, device)
+		student_output = student_model(tdata)
+		teacher_output = teacher_model(tdata)
+		loss = student_model.handle_kd_loss(teacher_output, student_output)
+		return loss
 
 	def get_data_loader(self, dataset, batch_size=64, shuffle=True, droplast=False): # shuffle = True
 		def seed_worker():

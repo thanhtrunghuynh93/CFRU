@@ -61,11 +61,12 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"ULErase_R{}_P{:.2f}_alpha{}_seed{}".format(
+									"ULErase_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
-										option['seed']
+										option['seed'],
+										option['atk_method']
 									),
 									'record')
 		self.unlearn_term = None
