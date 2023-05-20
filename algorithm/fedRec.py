@@ -511,7 +511,8 @@ class Client():
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 		for iter in range(self.epochs):
 			# import pdb; pdb.set_trace()
-			data_loader.dataset.ng_sample(self.negative_sampling)
+			# data_loader.dataset.ng_sample(self.negative_sampling)
+			data_loader.dataset.ng_sample_original()
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
 				loss = self.calculator.get_loss(model, batch_data, self.option)
@@ -574,7 +575,7 @@ class Client():
 		round_num = self.unpack(svr_pkg)[1]
 
 		# data = self.unpack(svr_pkg)[2]
-		self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
+		# self.negative_sampling = self.train_data.semi_hard_ng_sample(self.model, self.users_set)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
 		self.train(self.model, round_num)

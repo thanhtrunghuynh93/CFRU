@@ -61,7 +61,8 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"FedEraser_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+									"FedEraser_{}_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+										option['model'],
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
@@ -106,14 +107,14 @@ class Server():
 			self.round_selected[idx].append(t)
 
 		# training
-		models = self.communicate(self.selected_clients)
+		models, important_weights = self.communicate(self.selected_clients)
 
 		#  Process Unlearning
 
 		# start algorithm
 		if self.option['clean_model'] == 2:
 			# save grads
-			self.process_grad_original(models, t)
+			self.process_grad_original(important_weights, t)
 			# find attack_clients
 			attack_clients = []
 			for cid in self.selected_clients:
@@ -365,7 +366,8 @@ class Server():
 			losses: a list of the losses of the global model on each training dataset
 		"""
 		models = [cp["model"] for cp in packages_received_from_clients]
-		return models
+		important_weights = [cp["important_weight"] for cp in packages_received_from_clients]
+		return models, important_weights
 
 	def global_lr_scheduler(self, current_round):
 		"""
@@ -529,6 +531,13 @@ class Client():
 		# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
+		self.init_variance_sets()
+
+	def init_variance_sets(self):
+		pass
+	
+	def update_variance_sets(self):
+		pass
 
 	def train(self, model, server_model):
 		"""
@@ -543,36 +552,34 @@ class Client():
 		neg_items_this_round = set()
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
-		start_time = time.time()
-		if self.option['alpha'] == -2 or self.option['alpha'] == -3:
-			neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
-		else:
-			neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
-		print("neg_items_this_round: ", time.time() - start_time)
+		# start_time = time.time()
+		# if self.option['alpha'] == -2 or self.option['alpha'] == -3:
+		# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
+		# else:
+		# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
+		# print("neg_items_this_round: ", time.time() - start_time)
 		
 		for iter in range(self.epochs):
-			# import pdb; pdb.set_trace()
-			# if self.option['alpha'] == -2 or self.option['alpha'] == -3:
-			# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample(self.negative_sampling))
-			# else:
-			# 	neg_items_this_round = neg_items_this_round.union(data_loader.dataset.ng_sample_original())
+			data_loader.dataset.pos_sampling() # sample on positive training data
 			for batch_id, batch_data in enumerate(data_loader):
 				model.zero_grad()
-				loss = self.calculator.get_loss(model, batch_data, self.option)
+				loss = self.calculator.get_loss_variance(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
+			# update mean and std for P_pos
+			self.update_variance_sets()
 		# save neg_items this round
 		# if self.option['alpha'] == -1  or self.option['alpha'] == -3 or self.option['alpha'] == 2:
 		# if self.option['clean_model'] == 2:
 		neg_items_this_round = list(neg_items_this_round)
 		self.neg_items.append(neg_items_this_round)
-		self.process_grad(server_model, self.neg_items[-1])
+		# self.process_grad(server_model, self.neg_items[-1])
 		# else:
 		# 	raise NameError('Wrong value for clean_model')
-		return
+		return self.process_grad(server_model, self.neg_items[-1])
 
 	def process_grad(self, server_model, negative_items):
-		all_selected_items = self.positive_items + negative_items
+		all_selected_items = list(set(self.positive_items + negative_items))
 		## grad save as dict: {'cid' : grad}
 		# grads_this_round = {}
 		# for idx in range(len(self.selected_clients)):
@@ -594,7 +601,8 @@ class Client():
 		# save updates
 		# self.grads_all_round.append(copy.deepcopy(M_v))
 		# update important weights
-		self.model = server_model + M_v.cuda()
+		# self.model = server_model + M_v.cuda()
+		return server_model + M_v.cuda()
 
 	def test(self, test_data, test_backdoor, server_model = None):
 		"""
@@ -660,11 +668,11 @@ class Client():
 		print("semi_hard_ng_sample: ", time.time() - start_time)
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, model)
-		cpkg = self.pack(copy.deepcopy(self.model))
+		important_weight = self.train(self.model, model)
+		cpkg = self.pack(copy.deepcopy(self.model), important_weight)
 		return cpkg
 
-	def pack(self, model):
+	def pack(self, model, important_weight):
 		"""
 		Packing the package to be send to the server. The operations of compression
 		of encryption of the package should be done here.
@@ -675,7 +683,8 @@ class Client():
 			package: a dict that contains the necessary information for the server
 		"""
 		return {
-			"model" : model
+			"model" : model,
+			"important_weight": important_weight
 		}
 
 	def is_active(self):

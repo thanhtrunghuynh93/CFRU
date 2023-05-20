@@ -1055,10 +1055,14 @@ class NCFData(Dataset):
 		self.num_ng = num_ng
 		self.is_training = is_training
 		self.labels = [0 for _ in range(len(features))]
+		self.len_data = (self.num_ng + 1) * len(self.labels) 
 		
-	def ng_sample(self):
+	def get_pos_items(self, user):
+		return self.train_mat[str(user)]
+	
+	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'
-		
+		all_neg_item = []
 		self.features_ng = []
 		for x in self.features_ps:
 			u = x[0]
@@ -1067,15 +1071,60 @@ class NCFData(Dataset):
 				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
 					j = np.random.randint(self.num_item)
 				self.features_ng.append([u, j])
+				all_neg_item.append(j)
 
 		labels_ps = [1 for _ in range(len(self.features_ps))]
 		labels_ng = [0 for _ in range(len(self.features_ng))]
 
 		self.features_fill = self.features_ps + self.features_ng
 		self.labels_fill = labels_ps + labels_ng
+		self.len_data = len(self.labels_fill)
+		return list(set(all_neg_item))
+	
+	def ng_sample_fedatk(self, model, topK, malicious_users):
+		assert self.is_training, 'no need to sampling when testing'
+		import copy
+		ft_pos = copy.copy(self.features_ps)
+		all_neg_item = []
+		self.features_ng = []
+		malicious_users_in_client = []
+		# self.malicious_features = []
+		for x in self.features_ps:
+			u = x[0]
+			if u in malicious_users:
+				malicious_users_in_client.append(u)
+				continue
+			# negative sampling for normal users
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]:
+					j = np.random.randint(self.num_item)
+				self.features_ng.append([u, j])
+				all_neg_item.append(j)
+		## 
+		malicious_users_in_client = set(malicious_users_in_client)
+		for user in malicious_users_in_client:
+			top_items, bottom_items = model.predict_user(user, topK)
+			# torch.manual_seed(42)
+			perm1 = torch.randperm(len(top_items))
+			perm2 = torch.randperm(len(bottom_items))
+			for x, y in zip(top_items[perm1], bottom_items[perm2]):
+				ft_pos.append([user, y.item()])
+				self.features_ng.append([user, x.item()])
+				all_neg_item.append(x.item())
+				all_neg_item.append(y.item())
+		
+		labels_ps = [1 for _ in range(len(ft_pos))]
+		labels_ng = [0 for _ in range(len(self.features_ng))]
+
+		self.features_fill = ft_pos + self.features_ng
+		self.labels_fill = labels_ps + labels_ng
+		self.len_data = len(self.labels_fill)
+		return list(set(all_neg_item))
 
 	def __len__(self):
-		return (self.num_ng + 1) * len(self.labels)
+		return self.len_data
+		# return (self.num_ng + 1) * len(self.labels)
 
 	def __getitem__(self, idx):
 		features = self.features_fill if self.is_training \

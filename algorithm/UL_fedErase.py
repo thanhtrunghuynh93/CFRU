@@ -61,7 +61,8 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"ULErase_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+									"ULErase_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+										option['model'],
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,

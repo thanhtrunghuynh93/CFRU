@@ -60,7 +60,8 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"FlipGrads_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+									"FlipGrads_{}_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+										option['model'],
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
