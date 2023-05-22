@@ -720,6 +720,119 @@ class ClassifyCalculator(BasicTaskCalculator):
 		loss = model.handle_loss(output, option)
 		return loss
 	
+	def get_loss_variance(self, model, data, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict):
+		# user_batch, item_batch = batches
+		# num_batch = len(user_batch)
+		model.eval() 
+		device = next(model.parameters()).device
+		tdata = self.data_to_device(data, device)
+		user_batch = data[0].tolist()
+		item_batch = data[1].tolist()
+		# for batch_idx in tqdm(range(num_batch)):
+		negitems=[]
+		negitems_candidates_all = []
+		for i in range(len(user_batch)):
+			negitems_candidates_all.append(Mu_idx[user_batch[i]])
+		negitems_candidates_all = np.array(negitems_candidates_all)
+
+		ratings_positems = model.get_score([tdata[0], tdata[1]])
+		ratings_positems = ratings_positems.squeeze(-1).detach().cpu().numpy()
+
+		# Sampling from the cache
+		Mu_items_all = []
+		for i in range(len(user_batch)):
+			Mu_items_all.append(candidate_cur[user_batch[i], negitems_candidates_all[i]])
+		# Mu_items_all = torch.tensor(Mu_items_all).view(-1, 1).long().to(device)
+		Mu_items_all = np.array(Mu_items_all)
+		Mu_items_all = torch.tensor(Mu_items_all).view(-1, 1).long().to(device)
+		users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1']).view(-1, 1).long().to(device)
+		# users = np.array(user_batch).reshape(-1, 1).repeat(1, var_config['S1']).reshape(-1, 1)
+		# users = torch.tensor(users).long().to(device)
+		# The model is called directly with the inputs
+		ratings_candidates_all = model.get_score([users, Mu_items_all]).view(-1, var_config['S1']).detach().cpu().numpy()
+
+		hisscore_candidates_all = []
+		hisscore_pos_all = []
+		for i in range(len(user_batch)):
+			user = user_batch[i]
+			hisscore_candidates_all.append(
+				score_cand_all[:, user:user+1, np.reshape(negitems_candidates_all[i], [-1])]) # 5 * 1 * N
+			pos = item_batch[i]
+			posid = train_iddict[user][pos]
+			hisscore_pos_all.append(score_pos_all[:, user:user+1, posid]) # 5 * 1
+		hisscore_candidates_all = np.concatenate(hisscore_candidates_all, axis=1) # 5 * B * N
+		hisscore_pos_all = np.expand_dims(np.concatenate(hisscore_pos_all, axis=1), -1) # 5 * B * 1
+
+		hislikelihood_candidates_all = 1 / (1 + np.exp(hisscore_pos_all - hisscore_candidates_all))
+
+		mean_candidates_all = np.mean(hislikelihood_candidates_all[:, :, :], axis=0)
+		variance_candidates_all = np.zeros(mean_candidates_all.shape)
+		for i in range(hislikelihood_candidates_all.shape[0]):
+			variance_candidates_all += (hislikelihood_candidates_all[i, :, :] - mean_candidates_all) ** 2
+		variance_candidates_all = np.sqrt(variance_candidates_all / hislikelihood_candidates_all.shape[0])
+
+		likelihood_candidates_all = \
+			1 / (1 + np.exp(np.expand_dims(ratings_positems, -1) - ratings_candidates_all))
+		
+		# Top sampling strategy by score + alpha * std
+		if var_config['alpha'] >= 0:
+			item_arg_all = np.argmax(likelihood_candidates_all +
+										var_config['alpha'] * min(1, epoch_cur/var_config['warmup'])
+										* variance_candidates_all, axis=1)
+		else:
+			item_arg_all = np.argmax(variance_candidates_all, axis=1)
+		example_weight = np.ones((len(user_batch),1), dtype=np.float)
+
+		for i in range(len(user_batch)):
+			negitems.append(candidate_cur[user_batch[i], negitems_candidates_all[i, item_arg_all[i]]])
+
+		# update Mu
+		negitems_mu_candidates = []
+		for i in range(len(user_batch)):
+			Mu_set = set(Mu_idx[user_batch[i]])
+			while len(Mu_idx[user_batch[i]]) < var_config['S1'] * (1 + var_config['S2_div_S1']):
+				random_item = random.randint(0, candidate_cur.shape[1] - 1)
+				while random_item in Mu_set:
+					random_item = random.randint(0, candidate_cur.shape[1] - 1)
+				Mu_idx[user_batch[i]].append(random_item)
+			negitems_mu_candidates.append(Mu_idx[user_batch[i]])
+		negitems_mu_candidates = np.array(negitems_mu_candidates)
+		
+		negitems_mu = []
+		for i in range(len(user_batch)):
+			negitems_mu.append(candidate_cur[user_batch[i], negitems_mu_candidates[i]])
+		# negitems_mu = torch.tensor(negitems_mu).view(-1, 1).long().to(device)
+		negitems_mu = np.array(negitems_mu)
+		negitems_mu = torch.tensor(negitems_mu).view(-1, 1).long().to(device)
+		users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1'] * (1 + var_config['S2_div_S1'])).view(-1, 1).long().to(device)
+		# users = np.array(user_batch).reshape(-1, 1).repeat(1, var_config['S1'] * (1 + var_config['S2_div_S1'])).reshape(-1, 1)
+		# users = torch.tensor(users).long().to(device)
+
+		# The model is called directly with the inputs
+		ratings_mu_candidates = model.get_score([users, negitems_mu]).view(-1, var_config['S1'] * (1 + var_config['S2_div_S1'])).detach().cpu().numpy()
+		ratings_mu_candidates = ratings_mu_candidates / var_config['temperature']
+		ratings_mu_candidates = np.exp(ratings_mu_candidates) / np.reshape(np.sum(np.exp(ratings_mu_candidates), axis=1), [-1, 1])
+
+		user_set = set()
+		for i in range(len(user_batch)):
+			if user_batch[i] in user_set:
+				continue
+			else:
+				user_set.add(user_batch[i])
+			cache_arg = np.random.choice(var_config['S1'] * (1 + var_config['S2_div_S1']), var_config['S1'],
+											p=ratings_mu_candidates[i], replace=False)
+			Mu_idx[user_batch[i]] = np.array(Mu_idx[user_batch[i]])[cache_arg].tolist()
+
+		model.train()
+		negitems = torch.tensor(negitems).view(-1, 1).squeeze(-1)
+		output = model([tdata[0], tdata[1], negitems.long().to(device)])
+		loss = model.handle_loss(output)
+		# 	loss_average += loss
+
+		negitems = negitems.tolist()
+		# import pdb; pdb.set_trace()
+		return loss, Mu_idx, negitems
+	
 	def get_kd_loss(self, student_model, teacher_model, data, option, device=None):
 		tdata = self.data_to_device(data, device)
 		student_output = student_model(tdata)
@@ -870,6 +983,15 @@ class BPRData(Dataset):
 
 	def get_pos_items(self, user):
 		return self.train_mat[str(user)]
+
+	def pos_sampling(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			self.features_fill.append([u, i, i])
+		self.len_data = len(self.features_fill)
+		return 
 
 	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'

@@ -29,7 +29,14 @@ class Model(FModule):
 		prediction_j = (user * item_j).sum(dim=-1)
 		return prediction_i, prediction_j
 
-	def handle_loss(self, data, option):
+	def get_score(self, data):
+		user = self.embed_user(data[0])
+		item_i = self.embed_item(data[1])
+
+		prediction_i = (user * item_i).sum(dim=-1)
+		return prediction_i
+
+	def handle_loss(self, data, option=None):
 		prediction_i = data[0]
 		prediction_j = data[1]
 		return - (prediction_i - prediction_j).sigmoid().log().sum()
