@@ -465,8 +465,10 @@ class Server():
 		if self.option['clean_model'] == 0:
 			for c in self.clients:
 				test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor, server_model)
+				print(test_acc)
 				test_metrics.append(test_acc)
 				backdoor_metrics.append(backdoor_acc)
+			import pdb; pdb.set_trace()
 		else: 
 			for idx in range(self.num_clients):
 				if idx in self.option['attacker']:
@@ -596,31 +598,58 @@ class Client():
 		# import pdb; pdb.set_trace()
 
 	
+	# def update_variance_sets(self, epoch_count):
+	# 	score_1epoch_nxt = []
+	# 	for c in range(5):
+	# 		score_1epoch_nxt.append(np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]))
+	# 	score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
+
+	# 	# delete the score_cand_cur[0,:,:] at the earlist timestamp
+	# 	if epoch_count >= 5 or epoch_count == 0:
+	# 		self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
+
+	# 	for c in range(5):
+	# 		self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+	# 	self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
+
+	# 	self.score_cand_cur = np.copy(self.score_cand_nxt[0])
+	# 	self.candidate_cur = np.copy(self.candidate_nxt[0])
+	# 	for c in range(4):
+	# 		self.candidate_nxt[c] = np.copy(self.candidate_nxt[c + 1])
+	# 		self.score_cand_nxt[c] = np.copy(self.score_cand_nxt[c + 1])
+	# 	self.candidate_nxt[4] = np.random.choice(self.num_item, [self.num_user, self.varset_size])
+	# 	for i in range(self.num_user):
+	# 		for j in range(self.varset_size):
+	# 			while self.candidate_nxt[4][i, j] in self.train_pos[i]:
+	# 				self.candidate_nxt[4][i, j] = random.randint(0, self.num_item - 1)
+	# 	self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
+
 	def update_variance_sets(self, epoch_count):
-		score_1epoch_nxt = []
-		for c in range(5):
-			score_1epoch_nxt.append(np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]))
+		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]) for c in range(5)]
+    
 		score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
 
-		# delete the score_cand_cur[0,:,:] at the earlist timestamp
+		# delete the score_cand_cur[0,:,:] at the earliest timestamp
 		if epoch_count >= 5 or epoch_count == 0:
 			self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
 
 		for c in range(5):
 			self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+
 		self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
 
-		self.score_cand_cur = np.copy(self.score_cand_nxt[0])
-		self.candidate_cur = np.copy(self.candidate_nxt[0])
+		# Re-assign the variables directly instead of creating a copy
+		self.score_cand_cur = self.score_cand_nxt[0]
+		self.candidate_cur = self.candidate_nxt[0]
+
 		for c in range(4):
-			self.candidate_nxt[c] = np.copy(self.candidate_nxt[c + 1])
-			self.score_cand_nxt[c] = np.copy(self.score_cand_nxt[c + 1])
-		self.candidate_nxt[4] = np.random.choice(self.num_item, [self.num_user, self.varset_size])
-		for i in range(self.num_user):
-			for j in range(self.varset_size):
-				while self.candidate_nxt[4][i, j] in self.train_pos[i]:
-					self.candidate_nxt[4][i, j] = random.randint(0, self.num_item - 1)
+			self.candidate_nxt[c] = self.candidate_nxt[c + 1]
+			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
+
+		# Utilize numpy random.choice to create the array with necessary condition
+		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
 		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
+
 
 	def normal_train(self, model, server_model, round_num):
 		"""
@@ -664,8 +693,9 @@ class Client():
 			round_num:
 		:return
 		"""
-		name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
+		name_malicious_client = ['Client{:02d}'.format(num) for num in self.option['attacker']]
 		if self.name in name_malicious_client:
+			import pdb; pdb.set_trace()
 			model.train()
 			print(self.datavol)
 			neg_items_this_round = set()
@@ -692,7 +722,7 @@ class Client():
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
-			
+			import time
 			for iter in range(self.epochs):
 				model.train()
 				epoch_cur = round_num*self.epochs + iter
@@ -707,7 +737,9 @@ class Client():
 					loss.backward()
 					optimizer.step()
 				# update mean and std for P_pos
+				# start_time = time.time()
 				self.update_variance_sets(epoch_cur)
+				# print('test 4: ', time.time() - start_time)
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			return self.process_grad(server_model, self.neg_items[-1])
