@@ -468,7 +468,6 @@ class Server():
 				print(test_acc)
 				test_metrics.append(test_acc)
 				backdoor_metrics.append(backdoor_acc)
-			import pdb; pdb.set_trace()
 		else: 
 			for idx in range(self.num_clients):
 				if idx in self.option['attacker']:
@@ -541,8 +540,8 @@ class Client():
 		# for variance-based negative sampling
 		self.varset_size = 3000 # size of candidate for var monitor
 		self.var_config = {
-			'S1': 8, # size of M_u
-			'S2_div_S1': 8, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool)
+			'S1': 20, # size of M_u
+			'S2_div_S1': 1, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool) 8/8
 			'alpha': 5.0,
 			'warmup': 50,
 			'temperature': 1.0
@@ -595,7 +594,6 @@ class Client():
 		self.score_cand_cur = np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100, predict_data=self.candidate_cur)])
 		self.score_cand_nxt = [np.zeros((0, self.num_user, self.varset_size)) for _ in range(5)]
 		self.score_pos_cur = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
-		# import pdb; pdb.set_trace()
 
 	
 	# def update_variance_sets(self, epoch_count):
@@ -695,7 +693,6 @@ class Client():
 		"""
 		name_malicious_client = ['Client{:02d}'.format(num) for num in self.option['attacker']]
 		if self.name in name_malicious_client:
-			import pdb; pdb.set_trace()
 			model.train()
 			print(self.datavol)
 			neg_items_this_round = set()

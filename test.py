@@ -15,7 +15,7 @@ if __name__ == '__main__':
     #     print(hist)
     #     # print('HR: {} | NDCG: {}'.format(hist['HR_on_clients'], hist['NDCG_on_clients']))
 
-    for alp in [0.06, 0.09, 0.2]:
-        with open('./fedtasksave/movielens1m_cnum10_dist11_skew0.0_seed0/FedEraser_R25_P0.30_alpha{}_clean2_seed0/record/history25.pkl'.format(alp), 'rb') as test_f:
+    for alp in [13]:
+        with open('./fedtasksave/movielens1m_cnum10_dist11_skew0.0_seed0/FedEraser_BPR_R13_P0.30_alpha0.09_clean2_seed0/record/history{}.pkl'.format(alp), 'rb') as test_f:
             hist = CPU_Unpickler(test_f).load()
         print('HR: {} | NDCG: {}'.format(hist['HR_on_clients'], hist['NDCG_on_clients']))
