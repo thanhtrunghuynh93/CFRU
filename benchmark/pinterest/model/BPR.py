@@ -1,31 +1,3 @@
-# import torch
-# import torch.nn as nn
-# import torch.nn.functional as F
-# from utils.fmodule import FModule
-
-# class Model(FModule):
-# 	def __init__(self, data_conf, conf):
-# 		super(Model, self).__init__()
-# 		"""
-# 		user_num: number of users;
-# 		item_num: number of items;
-# 		factor_num: number of predictive factors.
-# 		"""		
-# 		self.embed_user = nn.Embedding(data_conf['user_num'], conf['embedding.size'])
-# 		self.embed_item = nn.Embedding(data_conf['item_num'], conf['embedding.size'])
-
-# 		nn.init.normal_(self.embed_user.weight, std=0.01)
-# 		nn.init.normal_(self.embed_item.weight, std=0.01)
-
-# 	def forward(self, user, item_i, item_j):
-# 		user = self.embed_user(user)
-# 		item_i = self.embed_item(item_i)
-# 		item_j = self.embed_item(item_j)
-
-# 		prediction_i = (user * item_i).sum(dim=-1)
-# 		prediction_j = (user * item_j).sum(dim=-1)
-# 		return prediction_i, prediction_j
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -57,11 +29,32 @@ class Model(FModule):
 		prediction_j = (user * item_j).sum(dim=-1)
 		return prediction_i, prediction_j
 
-	def handle_loss(self, data, option):
+	def get_score(self, data):
+		user = self.embed_user(data[0])
+		item_i = self.embed_item(data[1])
+
+		prediction_i = (user * item_i).sum(dim=-1)
+		return prediction_i
+
+	def handle_loss(self, data, option=None):
 		prediction_i = data[0]
 		prediction_j = data[1]
 		return - (prediction_i - prediction_j).sigmoid().log().sum()
     
+	def handle_kd_loss(self, teacher_output, student_output):
+		kl_loss = torch.nn.KLDivLoss(reduction="batchmean")
+		def dist_loss(teacher, student, T=1):
+			# import pdb; pdb.set_trace()
+			prob_t = teacher/T
+			log_prob_s = torch.log(student/T)
+			# dist_loss = -(prob_t*log_prob_s).sum(dim=1).mean()
+			dist_loss = kl_loss(log_prob_s, prob_t)
+			return dist_loss
+		loss_student = - (student_output[0] - student_output[1]).sigmoid().log().sum()
+		dist_loss_pos = dist_loss(teacher_output[0], student_output[0])
+		dist_loss_neg = dist_loss(teacher_output[1], student_output[1])
+		return dist_loss_pos + dist_loss_neg #loss_student + 
+
 	def handle_test(self, data, top_k):
 		_, indices = torch.topk(data[0], top_k)
 		return indices

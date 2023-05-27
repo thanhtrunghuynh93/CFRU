@@ -53,6 +53,15 @@ class Model(FModule):
         # import pdb; pdb.set_trace()
         return prediction.view(-1), data[2]
     
+    def get_score(self, data):
+        embed_user_MLP = self.embed_user(data[0])
+        embed_item_MLP = self.embed_item(data[1])
+        interaction = torch.cat((embed_user_MLP, embed_item_MLP), -1)
+        output_MLP = self.MLP_layers(interaction)
+        prediction = self.predict_layer(output_MLP)
+        # import pdb; pdb.set_trace()
+        return prediction.view(-1)
+    
     def handle_loss(self, data, option):
         prediction = data[0]
         label = data[1].float()

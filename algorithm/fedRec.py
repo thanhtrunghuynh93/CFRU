@@ -505,6 +505,9 @@ class Client():
 			round_num:
 		:return
 		"""
+		# import pdb;pdb.set_trace()
+		model.to(fmodule.device)
+		## train
 		model.train()
 		print(self.datavol)
 		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
@@ -518,6 +521,8 @@ class Client():
 				loss = self.calculator.get_loss(model, batch_data, self.option)
 				loss.backward()
 				optimizer.step()
+		## end
+		model.to('cpu')
 		return
 
 	def test(self, test_data, test_backdoor):

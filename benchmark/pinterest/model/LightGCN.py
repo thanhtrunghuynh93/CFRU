@@ -22,7 +22,7 @@ class Model(FModule):
         nn.init.xavier_uniform_(self.embed_item.weight)
   
         # init norm adj matrix
-        self.sparse_norm_adj = self._init_norm_adj_mat(data_conf['training_data']) #.cuda()
+        self.sparse_norm_adj = self._init_norm_adj_mat(data_conf['training_data'])#.cuda()
 
     def _init_norm_adj_mat(self, training_data):
         # training_data : list of pair user-item interaction

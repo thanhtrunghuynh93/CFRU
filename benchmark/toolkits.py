@@ -1327,6 +1327,7 @@ class GCNData(Dataset):
 		self.train_mat = train_mat
 		self.num_ng = num_ng
 		self.is_training = is_training
+		self.len_data = self.num_ng * len(self.features) if self.is_training else len(self.features)
 
 	def ng_sample(self):
 		assert self.is_training, 'no need to sampling when testing'
@@ -1339,9 +1340,23 @@ class GCNData(Dataset):
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
 
+	def ng_sample_original(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		all_neg_item = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([u, i, j])
+				all_neg_item.append(j)
+		self.len_data = len(self.features_fill)
+		return list(set(all_neg_item))
+	
 	def __len__(self):
-		return self.num_ng * len(self.features) if \
-				self.is_training else len(self.features)
+		return self.len_data
 
 	def __getitem__(self, idx):
 		features = self.features_fill if \

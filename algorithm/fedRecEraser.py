@@ -540,8 +540,8 @@ class Client():
 		# for variance-based negative sampling
 		self.varset_size = 3000 # size of candidate for var monitor
 		self.var_config = {
-			'S1': 20, # size of M_u
-			'S2_div_S1': 1, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool) 8/8
+			'S1': 8, # size of M_u
+			'S2_div_S1': 8, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool) 8/8
 			'alpha': 5.0,
 			'warmup': 50,
 			'temperature': 1.0

@@ -177,19 +177,28 @@ def _model_merge_(m1, m2):
 
 def _model_add(m1, m2):
     op_with_graph = m1.ingraph or m2.ingraph
-    res = Model(data_conf, option).to(m1.get_device())
-    if op_with_graph:
-        res.op_with_graph()
-        ml1 = get_module_from_model(m1)
-        ml2 = get_module_from_model(m2)
-        mlr = get_module_from_model(res)
-        for n1, n2, nr in zip(ml1, ml2, mlr):
-            rd = _modeldict_add(n1._parameters, n2._parameters)
-            for l in nr._parameters.keys():
-                if nr._parameters[l] is None: continue
-                nr._parameters[l] = rd[l]
-    else:
+    # hi
+    device1 = m1.get_device()
+    device2 = m2.get_device()
+    if device1 == device2:
+        res = Model(data_conf, option).to(device1)
         _modeldict_cp(res.state_dict(), _modeldict_add(m1.state_dict(), m2.state_dict()))
+    else:
+        m2.to(device1)
+        res = Model(data_conf, option).to(device1)
+        # if op_with_graph:
+        #     res.op_with_graph()
+        #     ml1 = get_module_from_model(m1)
+        #     ml2 = get_module_from_model(m2)
+        #     mlr = get_module_from_model(res)
+        #     for n1, n2, nr in zip(ml1, ml2, mlr):
+        #         rd = _modeldict_add(n1._parameters, n2._parameters)
+        #         for l in nr._parameters.keys():
+        #             if nr._parameters[l] is None: continue
+        #             nr._parameters[l] = rd[l]
+        # else:
+        _modeldict_cp(res.state_dict(), _modeldict_add(m1.state_dict(), m2.state_dict()))
+        m2.to(device2)
     return res
 
 def _model_sub(m1, m2):
