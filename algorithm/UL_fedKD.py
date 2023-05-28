@@ -477,6 +477,7 @@ class Client():
 			fmodule._model_merge_(model, server_model)
    
 		if test_data:
+			model.to(fmodule.device)
 			model.eval()
 			data_loader = self.calculator.get_data_loader(test_data, batch_size=100, shuffle=False)
 			test_metric = self.calculator.test(model, data_loader, self.topN, self.users_set)
@@ -487,6 +488,7 @@ class Client():
 				backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
 				backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
 
+			model.to('cpu')
 			# return
 			return test_metric, backdoor_metric
 		else:
@@ -525,7 +527,8 @@ class Client():
 		# data = self.unpack(svr_pkg)[2]
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, model)
+		self.train(self.model.to(fmodule.device), model)
+		self.model.to('cpu')
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 	

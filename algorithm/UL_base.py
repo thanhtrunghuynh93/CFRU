@@ -3,10 +3,13 @@ from utils import fmodule
 import copy
 from multiprocessing import Pool as ThreadPool
 from main import logger
+from collections import defaultdict
 import pickle
 import os
 import utils.fflow as flw
+import utils.evaluate as EvalUser
 import torch
+import random
 import json
 class Server():
 	def __init__(self, option, model, clients, test_data = None, backtask_data = None):
@@ -60,12 +63,14 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"ULFast_R{}_P{:.2f}_alpha{}_clean{}_seed{}".format(
+									"ULBase_{}_R{}_P{:.2f}_alpha{}_seed{}_{}_c{}".format(
+										option['model'],
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
-										option['clean_model'],
-										option['seed']
+										option['seed'],
+										option['atk_method'],
+										self.option['clean_model']
 									),
 									'record')
 		self.unlearn_term = None
@@ -107,76 +112,15 @@ class Server():
 		# training
 		models = self.communicate(self.selected_clients)
 
+		# import pdb; pdb.set_trace()
+		# if t >= self.option['num_rounds'] - 5:
+		# 	self.save_models(t, models, self.unlearn_time)
+
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
 		# aggregate: pk = 1/K as default where K=len(selected_clients)
 		self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
 		return
-
-	def process_grad_original(self, models, round_id):
-		## self.model : global model before update
-		## models[cid] : model of client cid at round t
-
-		## grad save as dict: {'cid' : grad}
-		grads_this_round = {}
-		for idx in range(len(self.selected_clients)):
-			cid = self.selected_clients[idx]
-			grads_this_round[str(cid)] = (self.model - models[idx]).to('cpu') 
-
-		self.grads_all_round.append(grads_this_round)
-
-	def update_beta(self):
-		sum_vol = 0.0
-		for cid in self.selected_clients:
-			sum_vol += 1.0 * self.client_vols[cid]/self.data_vol
-		self.beta.append(sum_vol)
-
-	def getAttacker_rounds(self, attackers):
-		## get list of attacked rounds
-		round_attack = set([])
-		for cid in attackers:
-			round_attack.update(self.round_selected[cid])
-		round_attack = list(round_attack)
-		round_attack.sort()
-
-		## get list of attackers of each round
-		attackers_round = [[] for round in range(len(round_attack))]
-		for idx in range(len(round_attack)):
-			for cid in attackers:
-				if round_attack[idx] in self.round_selected[cid]:
-					attackers_round[idx].append(cid)
-
-		return round_attack, attackers_round
-
-	def compute_unlearn_term(self, round_attack, attackers_round, round):
-		## Init unlearn term
-		unlearning_term = fmodule._create_new_model(self.model) * 0.0
-		alpha = - self.alpha
-		# compute beta constraint in lipschitz inequality
-		list_beta = []
-		for idx in range(len(self.beta)): # idx: round_id
-			beta = self.beta[idx]
-			if idx in round_attack:
-				for cid in attackers_round[round_attack.index(idx)]:
-					beta -= 1.0 * self.client_vols[cid]/self.data_vol
-
-			beta = beta * alpha + 1
-			list_beta.append(beta)
-
-			# compute unlearning-term
-		for idx in range(len(round_attack)):
-			round_id = round_attack[idx]
-			# compute u-term at round round_id (attack round)
-			unlearning_term = unlearning_term * list_beta[round_id]
-			for c_id in attackers_round[idx]:
-				unlearning_term += 1.0 * self.client_vols[c_id]/self.data_vol * self.grads_all_round[round_id][str(c_id)].to(self.model.get_device())
-				self.grads_all_round[round_id][str(c_id)].to('cpu') #.cpu()
-
-			if idx == len(round_attack) - 1: continue
-			for r_id in range(round_id + 1, round_attack[idx + 1]):
-				unlearning_term = unlearning_term * list_beta[r_id]
-		unlearning_term = unlearning_term * self.theta
-		return unlearning_term
 
 	def remove_atk(self, attackers):
 		for cid in attackers:
@@ -269,8 +213,8 @@ class Server():
 				c.set_learning_rate(self.lr)
 
 	def sample(self, t):
-		# import pdb; pdb.set_trace()
 		self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
+		# self.fixed_selected_clients[t] = [i for i in range(1)]
 		##
 		if self.option['clean_model'] == 0:
 			selected_clients = self.fixed_selected_clients[t]
@@ -336,19 +280,13 @@ class Server():
 			loss: the loss of the global model on each client's dataset
 		"""
 		test_metrics = []
-		backdoor_metrics = []
-		if self.option['clean_model'] == 0:
-			for c in self.clients:
-				test_acc, backdoor_acc = c.test(self.test_data, self.test_backdoor, server_model)
-				test_metrics.append(test_acc)
-				backdoor_metrics.append(backdoor_acc)
-		else: 
-			for idx in range(self.num_clients):
-				if idx in self.option['attacker']:
-					continue
-				test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
-				test_metrics.append(test_acc)
-				backdoor_metrics.append(backdoor_acc)
+		backdoor_metrics = [] 
+		for idx in range(self.num_clients):
+			if idx in self.option['attacker']:
+				continue
+			test_acc, backdoor_acc = self.clients[idx].test(self.test_data, self.test_backdoor, server_model)
+			test_metrics.append(test_acc)
+			backdoor_metrics.append(backdoor_acc)
 		return test_metrics, backdoor_metrics
 
 	def test(self, model=None):
@@ -399,41 +337,157 @@ class Client():
 		self.topN = option['topN']
 		self.model = model
 		# system setting
+		self.malicious_users = option['malicious_users']
      	# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
 
-	def train(self, model, server_model):
+		# for variance-based negative sampling
+		self.varset_size = 3000 # size of candidate for var monitor
+		self.var_config = {
+			'S1': 8, # size of M_u
+			'S2_div_S1': 8, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool) 8/8
+			'alpha': 5.0,
+			'warmup': 50,
+			'temperature': 1.0
+		}
+		# self.S1 = 20 
+		# self.S2_div_S1 = 1 
+		self.num_user = self.model.state_dict()['embed_user.weight'].shape[0]
+		self.num_item = self.model.state_dict()['embed_item.weight'].shape[0]
+		self.init_variance_sets()
+
+	def init_variance_sets(self):
+		# init the train_set, test_set
+		train_set = defaultdict(set)
+		train_data = self.train_data.features
+		for i in range(len(train_data)):
+			train_set[train_data[i][0]].add(train_data[i][1])
+
+		# init the train_iddict [u] pos->id
+		self.train_iddict = [defaultdict(int) for _ in range(self.num_user)]
+		self.train_pos = [[] for _ in range(self.num_user)]
+		self.max_posid = 0
+		for i in range(self.num_user):
+			poscnt = 0
+			self.max_posid = max(self.max_posid, len(train_set[i]))
+			for p in train_set[i]:
+				self.train_iddict[i][p] = poscnt
+				poscnt += 1
+				self.train_pos[i].append(p)
+		print("MAX POS IDX: %d"%self.max_posid)
+
+		# init the two candidate sets for monitoring variance
+		self.candidate_cur = np.random.choice(self.num_item, [self.num_user, self.varset_size])
+		for i in range(self.num_user):
+			for j in range(self.varset_size):
+				while self.candidate_cur[i, j] in train_set[i]:
+					self.candidate_cur[i, j] = random.randint(0, self.num_item - 1)
+
+		self.candidate_nxt = [np.random.choice(self.num_item, [self.num_user, self.varset_size]) for _ in range(5)]
+		for c in range(5):
+			for i in range(self.num_user):
+				for j in range(self.varset_size):
+					while self.candidate_nxt[c][i, j] in train_set[i]:
+						self.candidate_nxt[c][i, j] = random.randint(0, self.num_item - 1)
+
+		self.Mu_idx = []  # All possible items or non-fn items
+		for i in range(self.num_user):
+			Mu_idx_tmp = random.sample(list(range(self.varset_size)), self.var_config['S1'])
+			self.Mu_idx.append(Mu_idx_tmp)
+
+		self.score_cand_cur = np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100, predict_data=self.candidate_cur)])
+		self.score_cand_nxt = [np.zeros((0, self.num_user, self.varset_size)) for _ in range(5)]
+		self.score_pos_cur = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
+	
+	def update_variance_sets(self, epoch_count):
+		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]) for c in range(5)]
+    
+		score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
+
+		# delete the score_cand_cur[0,:,:] at the earliest timestamp
+		if epoch_count >= 5 or epoch_count == 0:
+			self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
+
+		for c in range(5):
+			self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+
+		self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
+
+		# Re-assign the variables directly instead of creating a copy
+		self.score_cand_cur = self.score_cand_nxt[0]
+		self.candidate_cur = self.candidate_nxt[0]
+
+		for c in range(4):
+			self.candidate_nxt[c] = self.candidate_nxt[c + 1]
+			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
+
+		# Utilize numpy random.choice to create the array with necessary condition
+		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
+
+	def train(self, model, server_model, round_num):
 		"""
 		Standard local training procedure. Train the transmitted model with local training dataset.
 		:param
-			model: the global model
+			model: the global model 
 			round_num:
 		:return
 		"""
-		model.train()
-		print(self.datavol)
-		data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
-		optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
-		for iter in range(self.epochs):
-			# negative sample based on attack method
-			if self.option['atk_method'] == 'fedAttack':
-				data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.option['malicious_users'])
-			else:
-				data_loader.dataset.ng_sample_original()
-			# training
-			for batch_id, batch_data in enumerate(data_loader):
-				model.zero_grad()
-				loss = self.calculator.get_loss(model, batch_data, self.option)
-				loss.backward()
-				optimizer.step()
-		if self.option['atk_method'] == 'fedFlipGrads':
-			name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
-			if self.name in name_malicious_client: #== 'Client00':
+		name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
+		if self.name in name_malicious_client:
+			import pdb; pdb.set_trace()
+			model.train()
+			print(self.datavol)
+			# neg_items_this_round = set()
+			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
+			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
+			
+			for iter in range(self.epochs):
+				if self.option['atk_method'] == 'fedAttack':
+					data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users)
+				else:
+					data_loader.dataset.ng_sample_original()
+				# neg_items_this_round.update(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
+				for batch_id, batch_data in enumerate(data_loader):
+					model.zero_grad()
+					# import pdb; pdb.set_trace()
+					loss = self.calculator.get_loss(model, batch_data, self.option)
+					loss.backward()
+					optimizer.step()
+				# update mean and std for P_pos
+			# neg_items_this_round = list(neg_items_this_round)
+			# self.neg_items.append(neg_items_this_round)
+			if self.option['atk_method'] == 'fedFlipGrads':
 				# import pdb; pdb.set_trace()
 				update_client = model - server_model
 				self.model = server_model - update_client
-		return
+		else:
+			# model.train()
+			print(self.datavol)
+			# neg_items_this_round = set()
+			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
+			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
+			import time
+			for iter in range(self.epochs):
+				model.train()
+				epoch_cur = round_num*self.epochs + iter
+				data_loader.dataset.pos_sampling() # sample on positive training data
+				for batch_id, batch_data in enumerate(data_loader):
+					model.zero_grad()
+					# import pdb; pdb.set_trace()
+					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance(model, batch_data, self.var_config, epoch_cur, 
+										self.score_cand_cur, self.score_pos_cur, self.Mu_idx, self.candidate_cur, self.train_iddict, self.option)
+					# neg_items_this_round.update(neg_items)
+					# backward
+					loss.backward()
+					optimizer.step()
+				# update mean and std for P_pos
+				# start_time = time.time()
+				self.update_variance_sets(epoch_cur)
+				# print('test 4: ', time.time() - start_time)
+			# neg_items_this_round = list(neg_items_this_round)
+			# self.neg_items.append(neg_items_this_round)
 
 	def test(self, test_data, test_backdoor, server_model = None):
 		"""
@@ -451,6 +505,8 @@ class Client():
 			fmodule._model_merge_(model, server_model)
    
 		if test_data:
+			model.to(fmodule.device)
+			#
 			model.eval()
 			data_loader = self.calculator.get_data_loader(test_data, batch_size=100, shuffle=False)
 			test_metric = self.calculator.test(model, data_loader, self.topN, self.users_set)
@@ -460,7 +516,8 @@ class Client():
 			if test_backdoor:
 				backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
 				backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
-
+			#
+			model.to('cpu')
 			# return
 			return test_metric, backdoor_metric
 		else:
@@ -496,11 +553,12 @@ class Client():
 		# data = self.unpack(svr_pkg)[2]
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, model)
+		self.train(self.model.to(fmodule.device), model, round_num)
+		self.model.to('cpu')
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 
-	def pack(self, model):
+	def pack(self, model, important_weight):
 		"""
 		Packing the package to be send to the server. The operations of compression
 		of encryption of the package should be done here.
@@ -533,6 +591,14 @@ class Client():
 		"""
 		if self.drop_rate==0: return False
 		else: return (np.random.rand() < self.drop_rate)
+
+	# def train_loss(self, model):
+	#     """
+	#     Get the task specified loss of the model on local training data
+	#     :param model:
+	#     :return:
+	#     """
+	#     return self.test(model,'train')[1]
 
 	def valid_loss(self, model):
 		"""

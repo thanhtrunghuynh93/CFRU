@@ -720,7 +720,7 @@ class ClassifyCalculator(BasicTaskCalculator):
 		loss = model.handle_loss(output, option)
 		return loss
 	
-	def get_loss_variance(self, model, data, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict):
+	def get_loss_variance(self, model, data, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict, option=None):
 		model.eval()
 		device = next(model.parameters()).device
 		tdata = self.data_to_device(data, device)
@@ -771,7 +771,7 @@ class ClassifyCalculator(BasicTaskCalculator):
 		model.train()
 		negitems = torch.tensor(negitems).view(-1, 1).squeeze(-1)
 		output = model([tdata[0], tdata[1], negitems.long().to(device)])
-		loss = model.handle_loss(output)
+		loss = model.handle_loss(output, option)
 
 		return loss, Mu_idx, negitems.tolist()
 
@@ -1220,6 +1220,101 @@ class BPRData(Dataset):
 				self.is_training else features[idx][1]
 		return user, item_i, item_j 
 
+# class NCFData(Dataset):
+# 	def __init__(self, features, 
+# 				num_item, train_mat=None, num_ng=0, is_training=None):
+# 		super(NCFData, self).__init__()
+# 		""" Note that the labels are only useful when training, we thus 
+# 			add them in the ng_sample() function.
+# 		"""
+# 		self.features_ps = features
+# 		self.num_item = num_item
+# 		self.train_mat = train_mat
+# 		self.num_ng = num_ng
+# 		self.is_training = is_training
+# 		self.labels = [0 for _ in range(len(features))]
+# 		self.len_data = (self.num_ng + 1) * len(self.labels) 
+		
+# 	def get_pos_items(self, user):
+# 		return self.train_mat[str(user)]
+	
+# 	def ng_sample_original(self):
+# 		assert self.is_training, 'no need to sampling when testing'
+# 		all_neg_item = []
+# 		self.features_ng = []
+# 		for x in self.features_ps:
+# 			u = x[0]
+# 			for t in range(self.num_ng):
+# 				j = np.random.randint(self.num_item)
+# 				while j in self.train_mat[str(u)]: #(u, j) in self.train_mat:
+# 					j = np.random.randint(self.num_item)
+# 				self.features_ng.append([u, j])
+# 				all_neg_item.append(j)
+
+# 		labels_ps = [1 for _ in range(len(self.features_ps))]
+# 		labels_ng = [0 for _ in range(len(self.features_ng))]
+
+# 		self.features_fill = self.features_ps + self.features_ng
+# 		self.labels_fill = labels_ps + labels_ng
+# 		self.len_data = len(self.labels_fill)
+# 		return list(set(all_neg_item))
+	
+# 	def ng_sample_fedatk(self, model, topK, malicious_users):
+# 		assert self.is_training, 'no need to sampling when testing'
+# 		import copy
+# 		ft_pos = copy.copy(self.features_ps)
+# 		all_neg_item = []
+# 		self.features_ng = []
+# 		malicious_users_in_client = []
+# 		# self.malicious_features = []
+# 		for x in self.features_ps:
+# 			u = x[0]
+# 			if u in malicious_users:
+# 				malicious_users_in_client.append(u)
+# 				continue
+# 			# negative sampling for normal users
+# 			for t in range(self.num_ng):
+# 				j = np.random.randint(self.num_item)
+# 				while j in self.train_mat[str(u)]:
+# 					j = np.random.randint(self.num_item)
+# 				self.features_ng.append([u, j])
+# 				all_neg_item.append(j)
+# 		## 
+# 		malicious_users_in_client = set(malicious_users_in_client)
+# 		for user in malicious_users_in_client:
+# 			top_items, bottom_items = model.predict_user(user, topK)
+# 			# torch.manual_seed(42)
+# 			perm1 = torch.randperm(len(top_items))
+# 			perm2 = torch.randperm(len(bottom_items))
+# 			for x, y in zip(top_items[perm1], bottom_items[perm2]):
+# 				ft_pos.append([user, y.item()])
+# 				self.features_ng.append([user, x.item()])
+# 				all_neg_item.append(x.item())
+# 				all_neg_item.append(y.item())
+		
+# 		labels_ps = [1 for _ in range(len(ft_pos))]
+# 		labels_ng = [0 for _ in range(len(self.features_ng))]
+
+# 		self.features_fill = ft_pos + self.features_ng
+# 		self.labels_fill = labels_ps + labels_ng
+# 		self.len_data = len(self.labels_fill)
+# 		return list(set(all_neg_item))
+
+# 	def __len__(self):
+# 		return self.len_data
+# 		# return (self.num_ng + 1) * len(self.labels)
+
+# 	def __getitem__(self, idx):
+# 		features = self.features_fill if self.is_training \
+# 					else self.features_ps
+# 		labels = self.labels_fill if self.is_training \
+# 					else self.labels
+
+# 		user = features[idx][0]
+# 		item = features[idx][1]
+# 		label = labels[idx]
+# 		return user, item ,label
+
 class NCFData(Dataset):
 	def __init__(self, features, 
 				num_item, train_mat=None, num_ng=0, is_training=None):
@@ -1227,7 +1322,7 @@ class NCFData(Dataset):
 		""" Note that the labels are only useful when training, we thus 
 			add them in the ng_sample() function.
 		"""
-		self.features_ps = features
+		self.features = features
 		self.num_item = num_item
 		self.train_mat = train_mat
 		self.num_ng = num_ng
@@ -1238,11 +1333,21 @@ class NCFData(Dataset):
 	def get_pos_items(self, user):
 		return self.train_mat[str(user)]
 	
+	def pos_sampling(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = self.features
+		self.labels_fill = [1 for _ in range(len(self.features))]
+		# for x in self.features:
+		# 	u, i = x[0], x[1]
+		# 	self.features_fill.append([u, i, i])
+		self.len_data = len(self.features_fill)
+		return 
+	
 	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'
 		all_neg_item = []
 		self.features_ng = []
-		for x in self.features_ps:
+		for x in self.features:
 			u = x[0]
 			for t in range(self.num_ng):
 				j = np.random.randint(self.num_item)
@@ -1251,10 +1356,10 @@ class NCFData(Dataset):
 				self.features_ng.append([u, j])
 				all_neg_item.append(j)
 
-		labels_ps = [1 for _ in range(len(self.features_ps))]
+		labels_ps = [1 for _ in range(len(self.features))]
 		labels_ng = [0 for _ in range(len(self.features_ng))]
 
-		self.features_fill = self.features_ps + self.features_ng
+		self.features_fill = self.features + self.features_ng
 		self.labels_fill = labels_ps + labels_ng
 		self.len_data = len(self.labels_fill)
 		return list(set(all_neg_item))
@@ -1262,12 +1367,12 @@ class NCFData(Dataset):
 	def ng_sample_fedatk(self, model, topK, malicious_users):
 		assert self.is_training, 'no need to sampling when testing'
 		import copy
-		ft_pos = copy.copy(self.features_ps)
+		ft_pos = copy.copy(self.features)
 		all_neg_item = []
 		self.features_ng = []
 		malicious_users_in_client = []
 		# self.malicious_features = []
-		for x in self.features_ps:
+		for x in self.features:
 			u = x[0]
 			if u in malicious_users:
 				malicious_users_in_client.append(u)
@@ -1306,7 +1411,7 @@ class NCFData(Dataset):
 
 	def __getitem__(self, idx):
 		features = self.features_fill if self.is_training \
-					else self.features_ps
+					else self.features
 		labels = self.labels_fill if self.is_training \
 					else self.labels
 
@@ -1329,6 +1434,9 @@ class GCNData(Dataset):
 		self.is_training = is_training
 		self.len_data = self.num_ng * len(self.features) if self.is_training else len(self.features)
 
+	def get_pos_items(self, user):
+		return self.train_mat[str(user)]
+	
 	def ng_sample(self):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
@@ -1340,6 +1448,15 @@ class GCNData(Dataset):
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
 
+	def pos_sampling(self):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			self.features_fill.append([u, i, i])
+		self.len_data = len(self.features_fill)
+		return 
+	
 	def ng_sample_original(self):
 		assert self.is_training, 'no need to sampling when testing'
 		self.features_fill = []
@@ -1352,6 +1469,41 @@ class GCNData(Dataset):
 					j = np.random.randint(self.num_item)
 				self.features_fill.append([u, i, j])
 				all_neg_item.append(j)
+		self.len_data = len(self.features_fill)
+		return list(set(all_neg_item))
+	
+	def ng_sample_fedatk(self, model, topK, malicious_users):
+		assert self.is_training, 'no need to sampling when testing'
+		self.features_fill = []
+		all_neg_item = []
+		malicious_users_in_client = []
+		# self.malicious_features = []
+		for x in self.features:
+			u, i = x[0], x[1]
+			if u in malicious_users:
+				malicious_users_in_client.append(u)
+				# self.malicious_features.append(x)
+				continue
+			# negative sampling for normal users
+			for t in range(self.num_ng):
+				j = np.random.randint(self.num_item)
+				while j in self.train_mat[str(u)]:
+					j = np.random.randint(self.num_item)
+				self.features_fill.append([u, i, j])
+				all_neg_item.append(j)
+		## 
+		malicious_users_in_client = set(malicious_users_in_client)
+		for user in malicious_users_in_client:
+			top_items, bottom_items = model.predict_user(user, topK)
+			# torch.manual_seed(42)
+			perm1 = torch.randperm(len(top_items))
+			perm2 = torch.randperm(len(bottom_items))
+			for x, y in zip(top_items[perm1], bottom_items[perm2]):
+				self.features_fill.append([user, y.item(), x.item()])
+				#
+				all_neg_item.append(x.item())
+				all_neg_item.append(y.item())
+		random.shuffle(self.features_fill)
 		self.len_data = len(self.features_fill)
 		return list(set(all_neg_item))
 	

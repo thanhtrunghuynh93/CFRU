@@ -406,6 +406,7 @@ class Client():
 		self.topN = option['topN']
 		self.model = model
 		# system setting
+		self.malicious_users = option['malicious_users']
      	# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
 		self.drop_rate = 0 if option['net_drop']<0.01 else np.random.beta(option['net_drop'], 1, 1).item()
 		self.active_rate = 1 if option['net_active']>99998 else np.random.beta(option['net_active'], 1, 1).item()
@@ -458,6 +459,7 @@ class Client():
 			fmodule._model_merge_(model, server_model)
    
 		if test_data:
+			model.to(fmodule.device)
 			model.eval()
 			data_loader = self.calculator.get_data_loader(test_data, batch_size=100, shuffle=False)
 			test_metric = self.calculator.test(model, data_loader, self.topN, self.users_set)
@@ -468,6 +470,7 @@ class Client():
 				backdoor_loader = self.calculator.get_data_loader(test_backdoor, batch_size = 100, shuffle=False)
 				backdoor_metric = self.calculator.test(model, backdoor_loader, self.topN)
 
+			model.to('cpu')
 			# return
 			return test_metric, backdoor_metric
 		else:
@@ -503,7 +506,8 @@ class Client():
 		# data = self.unpack(svr_pkg)[2]
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		self.train(self.model, model)
+		self.train(self.model.to(fmodule.device), model)
+		self.model.to('cpu')
 		cpkg = self.pack(copy.deepcopy(self.model))
 		return cpkg
 
