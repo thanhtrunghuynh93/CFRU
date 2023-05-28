@@ -62,7 +62,7 @@ class Model(FModule):
         # import pdb; pdb.set_trace()
         return prediction.view(-1)
     
-    def handle_loss(self, data, option):
+    def handle_loss(self, data, option=None):
         prediction = data[0]
         label = data[1].float()
         return loss_func(prediction, label)

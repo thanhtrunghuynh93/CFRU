@@ -80,6 +80,26 @@ class Model(FModule):
         item_j_embedding = item_all_embeddings[item_j]
         return user_embedding, item_i_embedding, item_j_embedding
     
+    def get_score(self, data):
+        user = data[0]
+        item_i = data[1]
+        # item_j = data[2]
+        ego_embeddings = torch.cat([self.embed_user.weight, self.embed_item.weight], 0)
+        all_embeddings = [ego_embeddings]
+        for k in range(self.layers):
+            ego_embeddings = torch.sparse.mm(self.sparse_norm_adj, ego_embeddings)
+            all_embeddings += [ego_embeddings]
+        all_embeddings = torch.stack(all_embeddings, dim=1)
+        all_embeddings = torch.mean(all_embeddings, dim=1)
+        user_all_embeddings = all_embeddings[:self.user_num]
+        item_all_embeddings = all_embeddings[self.user_num:]
+        # get embedding of given user and item
+        user_embedding = user_all_embeddings[user]
+        item_i_embedding = item_all_embeddings[item_i]
+        # item_j_embedding = item_all_embeddings[item_j]
+        prediction_i = (user_embedding * item_i_embedding).sum(dim=-1)
+        return prediction_i
+    
     def handle_loss(self, data, option):
         user_emb = data[0]
         pos_item_emb = data[1]
