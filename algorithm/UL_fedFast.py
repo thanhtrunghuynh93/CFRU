@@ -164,6 +164,7 @@ class Server():
 			"models": models,
 			"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
 			"server_model": self.model,
+			"clean_model": clean_model,
 			"unlearn_term_algo3": self.unlearn_term,
 			"unlearn_time": unlearn_time,
 			"HR_on_clients": mean_hr,
