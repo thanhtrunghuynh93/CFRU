@@ -760,7 +760,13 @@ class ClassifyCalculator(BasicTaskCalculator):
 		users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1'] * (1 + var_config['S2_div_S1'])).view(-1, 1).long().to(device)
 		ratings_mu_candidates = model.get_score([users, negitems_mu]).view(-1, var_config['S1'] * (1 + var_config['S2_div_S1'])).detach().cpu().numpy()
 
-		ratings_mu_candidates = np.exp(ratings_mu_candidates / var_config['temperature']) / np.reshape(np.sum(np.exp(ratings_mu_candidates), axis=1), [-1, 1])
+		# pre-process
+		min_vals = np.min(ratings_mu_candidates, axis=1, keepdims=True)
+		max_vals = np.max(ratings_mu_candidates, axis=1, keepdims=True)
+
+		ratings_mu_candidates = (ratings_mu_candidates - min_vals) / (max_vals - min_vals)
+		# ratings_mu_candidates = ratings_mu_candidates / var_config['temperature']
+		ratings_mu_candidates = np.exp(ratings_mu_candidates) / np.reshape(np.sum(np.exp(ratings_mu_candidates), axis=1), [-1, 1])
 		user_set = set()
 		for i in range(len(user_batch)):
 			if user_batch[i] not in user_set:

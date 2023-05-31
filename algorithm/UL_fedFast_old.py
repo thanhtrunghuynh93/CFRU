@@ -536,7 +536,7 @@ class Client():
 				poscnt += 1
 				self.train_pos[i].append(p)
 		print("MAX POS IDX: %d"%self.max_posid)
-		if	not os.path.exists(os.path.join(self.init_var_folder, str(self.name) + ".npz")):
+		if	os.path.exists(os.path.join(self.init_var_folder, str(self.name) + ".npz")):
 			# init the two candidate sets for monitoring variance
 			# self.candidate_cur = np.random.choice(self.num_item, [self.num_user, self.varset_size])
 			# for i in range(self.num_user):
@@ -544,10 +544,10 @@ class Client():
 			# 		while self.candidate_cur[i, j] in train_set[i]:
 			# 			self.candidate_cur[i, j] = random.randint(0, self.num_item - 1)
 
-			candidate_cur = np.empty([self.num_user, self.varset_size], dtype=np.int32)
+			self.candidate_cur = np.empty([self.num_user, self.varset_size], dtype=np.int32)
 			for i in range(self.num_user):
 				valid_options = list(set(range(self.num_item)) - set(train_set[i]))
-				candidate_cur[i] = np.random.choice(valid_options, self.varset_size)
+				self.candidate_cur[i] = np.random.choice(valid_options, self.varset_size)
 
 			# self.candidate_nxt = [np.random.choice(self.num_item, [self.num_user, self.varset_size]) for _ in range(5)]
 			# for c in range(5):
@@ -556,18 +556,18 @@ class Client():
 			# 			while self.candidate_nxt[c][i, j] in train_set[i]:
 			# 				self.candidate_nxt[c][i, j] = random.randint(0, self.num_item - 1)
 
-			candidate_nxt = [np.empty([self.num_user, self.varset_size], dtype=np.int32) for _ in range(5)]
+			self.candidate_nxt = [np.empty([self.num_user, self.varset_size], dtype=np.int32) for _ in range(5)]
 
 			for c in range(5):
 				for i in range(self.num_user):
 					valid_options = list(set(range(self.num_item)) - set(train_set[i]))
-					candidate_nxt[c][i] = np.random.choice(valid_options, self.varset_size)
+					self.candidate_nxt[c][i] = np.random.choice(valid_options, self.varset_size)
 
 
-			score_cand_cur = np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100, predict_data=candidate_cur)])
-			score_cand_nxt = [np.zeros((0, self.num_user, self.varset_size)) for _ in range(5)]
-			score_pos_cur = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
-			np.savez(os.path.join(self.init_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
+			self.score_cand_cur = np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100, predict_data=self.candidate_cur)])
+			self.score_cand_nxt = [np.zeros((0, self.num_user, self.varset_size)) for _ in range(5)]
+			self.score_pos_cur = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
+			# np.savez(os.path.join(self.init_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
 		self.Mu_idx = []  # All possible items or non-fn items
 		for i in range(self.num_user):
 			Mu_idx_tmp = random.sample(list(range(self.varset_size)), self.var_config['S1'])
@@ -575,37 +575,45 @@ class Client():
 		shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
 
 	def update_variance_sets(self, epoch_count):
-		loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
-		candidate_nxt=list(loaded_npz["candidate_nxt"])
-		candidate_cur=loaded_npz["candidate_cur"]
-		score_cand_cur=loaded_npz["score_cand_cur"]
-		score_cand_nxt=list(loaded_npz["score_cand_nxt"])
-		score_pos_cur=loaded_npz["score_pos_cur"]
-
-		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=candidate_nxt[c])]) for c in range(5)]
+		# loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"))
+		# candidate_nxt=loaded_npz["candidate_nxt"]
+		# candidate_cur=loaded_npz["candidate_cur"]
+		# score_cand_cur=loaded_npz["score_cand_cur"]
+		# score_cand_nxt=loaded_npz["score_cand_nxt"]
+		# score_pos_cur=loaded_npz["score_pos_cur"]
+		print(self.candidate_cur.shape)
+		for cand in self.candidate_nxt:
+			print(cand.shape)
+		print(self.score_cand_cur.shape)
+		for cand in self.score_cand_nxt:
+			print(cand.shape)
+		print(self.score_pos_cur.shape)
+		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]) for c in range(5)]
     
 		score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
 
 		# delete the score_cand_cur[0,:,:] at the earliest timestamp
 		if epoch_count >= 5 or epoch_count == 0:
-			score_pos_cur = np.delete(score_pos_cur, 0, 0)
+			self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
+		import pdb
+		pdb.set_trace()
 		for c in range(5):
-			score_cand_nxt[c] = np.concatenate([score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+			self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
 
-		score_pos_cur = np.concatenate([score_pos_cur, score_1epoch_pos], axis=0)
+		self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
 
 		# Re-assign the variables directly instead of creating a copy
-		score_cand_cur = score_cand_nxt[0]
-		candidate_cur = candidate_nxt[0]
+		self.score_cand_cur = self.score_cand_nxt[0]
+		self.candidate_cur = self.candidate_nxt[0]
 
 		for c in range(4):
-			candidate_nxt[c] = candidate_nxt[c + 1]
-			score_cand_nxt[c] = score_cand_nxt[c + 1]
+			self.candidate_nxt[c] = self.candidate_nxt[c + 1]
+			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
 
 		# Utilize numpy random.choice to create the array with necessary condition
-		candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
-		score_cand_nxt[4] = np.delete(score_cand_nxt[4], list(range(score_cand_nxt[4].shape[0])), 0)
-		np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
+		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
+		np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
 
 	def train(self, model, server_model, round_num):
 		"""

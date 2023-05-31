@@ -131,6 +131,18 @@ def initialize(option):
     Client=getattr(importlib.import_module(client_path), 'Client')
     clients = [Client(option, name = client_names[cid], model = utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
                     train_data = client_train_datas[cid], users_set = users_per_client[cid]) for cid in range(num_clients)]
+    # import concurrent.futures
+    # def create_client(cid):
+    #     return Client(
+    #         option, 
+    #         name=client_names[cid], 
+    #         model=utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
+    #         train_data=client_train_datas[cid], 
+    #         users_set=users_per_client[cid]
+    #     )
+
+    # with concurrent.futures.ProcessPoolExecutor() as executor:
+    #     clients = list(executor.map(create_client, range(num_clients)))
     print('done')
 
     # init server
