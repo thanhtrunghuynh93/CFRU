@@ -9,6 +9,7 @@ import utils.fmodule
 import ujson
 import time
 import copy
+from pathos.multiprocessing import ProcessPool
 
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']
@@ -129,21 +130,27 @@ def initialize(option):
     print('init clients...', end='')
     client_path = '%s.%s' % ('algorithm', option['algorithm'])
     Client=getattr(importlib.import_module(client_path), 'Client')
-    clients = [Client(option, name = client_names[cid], model = utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
-                    train_data = client_train_datas[cid], users_set = users_per_client[cid]) for cid in range(num_clients)]
-    # import concurrent.futures
-    # def create_client(cid):
-    #     return Client(
-    #         option, 
-    #         name=client_names[cid], 
-    #         model=utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
-    #         train_data=client_train_datas[cid], 
-    #         users_set=users_per_client[cid]
-    #     )
+    import time
+    start_time = time.time()
+    # clients = [Client(option, name = client_names[cid], model = utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
+    #                 train_data = client_train_datas[cid], users_set = users_per_client[cid]) for cid in range(num_clients)]
+    import multiprocessing
+    multiprocessing.set_start_method('spawn', force=True)
+    def create_client(cid):
+        return Client(
+            option, 
+            name=client_names[cid], 
+            model=utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
+            train_data=client_train_datas[cid], 
+            users_set=users_per_client[cid]
+        )
+    
+    # Create a pool of worker processes
+    pool = ProcessPool(num_clients)
 
-    # with concurrent.futures.ProcessPoolExecutor() as executor:
-    #     clients = list(executor.map(create_client, range(num_clients)))
-    print('done')
+    # Map create_client function across the input range
+    clients = pool.map(create_client, range(num_clients))
+    exit()
 
     # init server
     print("init server...", end='')

@@ -575,30 +575,37 @@ class Client():
 		shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
 
 	def update_variance_sets(self, epoch_count):
+		loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
+		candidate_nxt=list(loaded_npz["candidate_nxt"])
+		candidate_cur=loaded_npz["candidate_cur"]
+		score_cand_cur=loaded_npz["score_cand_cur"]
+		score_cand_nxt=list(loaded_npz["score_cand_nxt"])
+		score_pos_cur=loaded_npz["score_pos_cur"]
 
-		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]) for c in range(5)]
+		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=candidate_nxt[c])]) for c in range(5)]
     
 		score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
 
 		# delete the score_cand_cur[0,:,:] at the earliest timestamp
 		if epoch_count >= 5 or epoch_count == 0:
-			self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
+			score_pos_cur = np.delete(score_pos_cur, 0, 0)
 		for c in range(5):
-			self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+			score_cand_nxt[c] = np.concatenate([score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
 
-		self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
+		score_pos_cur = np.concatenate([score_pos_cur, score_1epoch_pos], axis=0)
 
 		# Re-assign the variables directly instead of creating a copy
-		self.score_cand_cur = self.score_cand_nxt[0]
-		self.candidate_cur = self.candidate_nxt[0]
+		score_cand_cur = score_cand_nxt[0]
+		candidate_cur = candidate_nxt[0]
 
 		for c in range(4):
-			self.candidate_nxt[c] = self.candidate_nxt[c + 1]
-			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
+			candidate_nxt[c] = candidate_nxt[c + 1]
+			score_cand_nxt[c] = score_cand_nxt[c + 1]
 
 		# Utilize numpy random.choice to create the array with necessary condition
-		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
-		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
+		candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		score_cand_nxt[4] = np.delete(score_cand_nxt[4], list(range(score_cand_nxt[4].shape[0])), 0)
+		np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
 
 	def train(self, model, server_model, round_num):
 		"""
@@ -639,36 +646,30 @@ class Client():
 		else:
 			# model.train()
 			print(self.datavol)
-			loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
-			self.candidate_nxt=list(loaded_npz["candidate_nxt"])
-			self.candidate_cur=loaded_npz["candidate_cur"]
-			self.score_cand_cur=loaded_npz["score_cand_cur"]
-			self.score_cand_nxt=list(loaded_npz["score_cand_nxt"])
-			self.score_pos_cur=loaded_npz["score_pos_cur"]
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 			model.train()
 			for iter in range(self.epochs):
+				loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"))
+				score_pos_cur = loaded_npz["score_pos_cur"]
+				score_cand_cur = loaded_npz["score_cand_cur"]
+				candidate_cur = loaded_npz["candidate_cur"]
 				epoch_cur = round_num*self.epochs + iter
 				data_loader.dataset.pos_sampling() # sample on positive training data
 				for batch_id, batch_data in enumerate(data_loader):
 					model.zero_grad()
 					# import pdb; pdb.set_trace()
 					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance(model, batch_data, self.var_config, epoch_cur, 
-										self.score_cand_cur, self.score_pos_cur, self.Mu_idx, self.candidate_cur, self.train_iddict, self.option)
+										score_cand_cur, score_pos_cur, self.Mu_idx, candidate_cur, self.train_iddict, self.option)
 					neg_items_this_round.update(neg_items)
 					# backward
 					loss.backward()
 					optimizer.step()
 				# update mean and std for P_pos
+				# start_time = time.time()
 				self.update_variance_sets(epoch_cur)
-			np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
-			del self.candidate_nxt
-			del self.candidate_cur
-			del self.score_cand_cur
-			del self.score_cand_nxt
-			del self.score_pos_cur
+				# print('test 4: ', time.time() - start_time)
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			return self.process_grad(server_model, self.neg_items[-1])
