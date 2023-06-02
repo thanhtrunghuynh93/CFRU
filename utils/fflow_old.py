@@ -8,6 +8,8 @@ import os
 import utils.fmodule
 import ujson
 import time
+import copy
+from pathos.multiprocessing import ProcessPool
 
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']
@@ -88,27 +90,10 @@ def setup_seed(seed):
     torch.backends.cudnn.deterministic = True
     torch.backends.cudnn.benchmark = False
 
-def create_client(args):
-    option, cid = args
-    print('init clients...', end='')
-    # dynamical initializing the configuration with the benchmark
-    bmk_name = option['task'][:option['task'].find('cnum')-1].lower()
-    bmk_model_path = '.'.join(['benchmark', bmk_name, 'model', option['model']])
-    bmk_core_path = '.'.join(['benchmark', bmk_name, 'core'])
-    utils.fmodule.device = torch.device('cuda:{}'.format(option['server_gpu_id']) if torch.cuda.is_available() and option['server_gpu_id'] != -1 else 'cpu')
-    utils.fmodule.TaskCalculator = getattr(importlib.import_module(bmk_core_path), 'TaskCalculator')
-    utils.fmodule.TaskCalculator.setOP(getattr(importlib.import_module('torch.optim'), option['optimizer']))
-    utils.fmodule.Model = getattr(importlib.import_module(bmk_model_path), 'Model')
-    task_reader = getattr(importlib.import_module(bmk_core_path), 'TaskReader')(taskpath=os.path.join('fedtask', option['task']))
-    client_train_datas, test_data, backdoor_data, users_per_client, data_conf, clients_config, client_names= task_reader.read_data(option['num_ng'], option['model'])
-
-    client_path = '%s.%s' % ('algorithm', option['algorithm'])
-    Client=getattr(importlib.import_module(client_path), 'Client')
-    client = Client(option, name = client_names[cid], model = utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
-                    train_data = client_train_datas[cid], users_set = users_per_client[cid])
-    return client
-
 def initialize(option):
+    # init fedtask
+    print("init fedtask...", end='')
+    # dynamical initializing the configuration with the benchmark
     bmk_name = option['task'][:option['task'].find('cnum')-1].lower()
     bmk_model_path = '.'.join(['benchmark', bmk_name, 'model', option['model']])
     bmk_core_path = '.'.join(['benchmark', bmk_name, 'core'])
@@ -139,10 +124,14 @@ def initialize(option):
     # set config in fmodule
     utils.fmodule.data_conf = data_conf
     utils.fmodule.option = option
-    
-    from multiprocessing import Pool
-    with Pool(processes=10) as pool:
-        clients = pool.map(create_client, [(option, cid) for cid in range(num_clients)])
+
+    # init client
+    # import pdb; pdb.set_trace()
+    print('init clients...', end='')
+    client_path = '%s.%s' % ('algorithm', option['algorithm'])
+    Client=getattr(importlib.import_module(client_path), 'Client')
+    clients = [Client(option, name = client_names[cid], model = utils.fmodule.Model(clients_config[cid], option).to(utils.fmodule.device), 
+                    train_data = client_train_datas[cid], users_set = users_per_client[cid]) for cid in range(num_clients)]
 
     # init server
     print("init server...", end='')

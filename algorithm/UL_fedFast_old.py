@@ -611,7 +611,11 @@ class Client():
 			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
 
 		# Utilize numpy random.choice to create the array with necessary condition
-		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		# self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		self.candidate_nxt[4] = np.empty([self.num_user, self.varset_size], dtype=np.int32)
+		for i in range(self.num_user):
+			valid_options = list(set(range(self.num_item)) - set(self.train_pos[i]))
+			self.candidate_nxt[4][i] = np.random.choice(valid_options, self.varset_size)
 		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
 		np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
 

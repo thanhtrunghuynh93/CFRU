@@ -110,7 +110,7 @@ class Server():
 			self.round_selected[idx].append(t)
 
 		# training
-		models, important_weights = self.communicate(self.selected_clients)
+		models, important_weights, not_tops = self.communicate(self.selected_clients)
 
 		#  Process Unlearning
 		# start algorithm
@@ -136,26 +136,27 @@ class Server():
 		# import pdb; pdb.set_trace()
 		# if t >= self.option['num_rounds'] - 5:
 		## compute updates:
-		grads_this_round = {}
-		for idx in range(len(self.selected_clients)):
-			cid = self.selected_clients[idx]
-			grads_this_round[str(cid)] = (self.model - important_weights[idx]).to('cpu') 
+		# grads_this_round = {}
+		# for idx in range(len(self.selected_clients)):
+		# 	cid = self.selected_clients[idx]
+		# 	grads_this_round[str(cid)] = (self.model - important_weights[idx]).to('cpu') 
 		# self.save_models(t, models, self.unlearn_time)
-
+		self.save_important_update(t, important_weights, models, not_tops)
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
 		# aggregate: pk = 1/K as default where K=len(selected_clients)
 		self.model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
-		self.save_important_update(t, grads_this_round, models)
+		# self.save_important_update(t, grads_this_round, models)
 		return
 
-	def save_important_update(self, round_num, grads_this_round, models):
+	def save_important_update(self, round_num, important_weights, models, not_tops):
 		save_logs = {
 			"selected_clients": self.selected_clients,
-			"updates": grads_this_round,
+			"updates": important_weights,
 			"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
 			"server_model": self.model,
-			"client_model": models
+			"client_model": models,
+			"not_top": not_tops
 		}
 
 		pickle.dump(save_logs,
@@ -332,7 +333,8 @@ class Server():
 		"""
 		models = [cp["model"] for cp in packages_received_from_clients]
 		important_weights = [cp["important_weight"] for cp in packages_received_from_clients]
-		return models, important_weights
+		not_tops = [cp["not_top"] for cp in packages_received_from_clients]
+		return models, important_weights, not_tops
 
 	def global_lr_scheduler(self, current_round):
 		"""
@@ -454,8 +456,8 @@ class Server():
 
 class Client():
 	def __init__(self, option, name='', model=None, train_data=None, users_set=None):
-		main_path_save = os.path.join('/mnt/disk2/bangnt/RecUnlearn/fedtasksave', option['task'],
-									"ULFast_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+		main_path_save = os.path.join('./fedtasksave', option['task'],
+									"ULTest_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['model'],
 										option['num_rounds'],
 										option['proportion'],
@@ -516,6 +518,7 @@ class Client():
 		self.num_user = self.model.state_dict()['embed_user.weight'].shape[0]
 		self.num_item = self.model.state_dict()['embed_item.weight'].shape[0]
 		self.init_variance_sets()
+		# shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
 
 	def init_variance_sets(self):
 		# init the train_set, test_set
@@ -575,41 +578,34 @@ class Client():
 		shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
 
 	def update_variance_sets(self, epoch_count):
-		loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
-		candidate_nxt=list(loaded_npz["candidate_nxt"])
-		candidate_cur=loaded_npz["candidate_cur"]
-		score_cand_cur=loaded_npz["score_cand_cur"]
-		score_cand_nxt=list(loaded_npz["score_cand_nxt"])
-		score_pos_cur=loaded_npz["score_pos_cur"]
 
-		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=candidate_nxt[c])]) for c in range(5)]
+		score_1epoch_nxt = [np.array([EvalUser.predict_fast(self.model, self.num_user, self.num_item, parallel_users=100,predict_data=self.candidate_nxt[c])]) for c in range(5)]
     
 		score_1epoch_pos = np.array([EvalUser.predict_pos(self.model, self.num_user, self.max_posid, parallel_users=100, predict_data=self.train_pos)])
 
 		# delete the score_cand_cur[0,:,:] at the earliest timestamp
 		if epoch_count >= 5 or epoch_count == 0:
-			score_pos_cur = np.delete(score_pos_cur, 0, 0)
+			self.score_pos_cur = np.delete(self.score_pos_cur, 0, 0)
 		for c in range(5):
-			score_cand_nxt[c] = np.concatenate([score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
+			self.score_cand_nxt[c] = np.concatenate([self.score_cand_nxt[c], score_1epoch_nxt[c]], axis=0)
 
-		score_pos_cur = np.concatenate([score_pos_cur, score_1epoch_pos], axis=0)
+		self.score_pos_cur = np.concatenate([self.score_pos_cur, score_1epoch_pos], axis=0)
 
 		# Re-assign the variables directly instead of creating a copy
-		score_cand_cur = score_cand_nxt[0]
-		candidate_cur = candidate_nxt[0]
+		self.score_cand_cur = self.score_cand_nxt[0]
+		self.candidate_cur = self.candidate_nxt[0]
 
 		for c in range(4):
-			candidate_nxt[c] = candidate_nxt[c + 1]
-			score_cand_nxt[c] = score_cand_nxt[c + 1]
+			self.candidate_nxt[c] = self.candidate_nxt[c + 1]
+			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
 
 		# Utilize numpy random.choice to create the array with necessary condition
 		# self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
-		candidate_nxt[4] = np.empty([self.num_user, self.varset_size], dtype=np.int32)
+		self.candidate_nxt[4] = np.empty([self.num_user, self.varset_size], dtype=np.int32)
 		for i in range(self.num_user):
 			valid_options = list(set(range(self.num_item)) - set(self.train_pos[i]))
-			candidate_nxt[4][i] = np.random.choice(valid_options, self.varset_size)
-		score_cand_nxt[4] = np.delete(score_cand_nxt[4], list(range(score_cand_nxt[4].shape[0])), 0)
-		np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
+			self.candidate_nxt[4][i] = np.random.choice(valid_options, self.varset_size)
+		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
 
 	def train(self, model, server_model, round_num):
 		"""
@@ -650,33 +646,59 @@ class Client():
 		else:
 			# model.train()
 			print(self.datavol)
+			loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
+			self.candidate_nxt=list(loaded_npz["candidate_nxt"])
+			self.candidate_cur=loaded_npz["candidate_cur"]
+			self.score_cand_cur=loaded_npz["score_cand_cur"]
+			self.score_cand_nxt=list(loaded_npz["score_cand_nxt"])
+			self.score_pos_cur=loaded_npz["score_pos_cur"]
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
 			model.train()
 			for iter in range(self.epochs):
-				loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"))
-				score_pos_cur = loaded_npz["score_pos_cur"]
-				score_cand_cur = loaded_npz["score_cand_cur"]
-				candidate_cur = loaded_npz["candidate_cur"]
 				epoch_cur = round_num*self.epochs + iter
 				data_loader.dataset.pos_sampling() # sample on positive training data
 				for batch_id, batch_data in enumerate(data_loader):
 					model.zero_grad()
 					# import pdb; pdb.set_trace()
 					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance(model, batch_data, self.var_config, epoch_cur, 
-										score_cand_cur, score_pos_cur, self.Mu_idx, candidate_cur, self.train_iddict, self.option)
+										self.score_cand_cur, self.score_pos_cur, self.Mu_idx, self.candidate_cur, self.train_iddict, self.option)
 					neg_items_this_round.update(neg_items)
 					# backward
 					loss.backward()
 					optimizer.step()
 				# update mean and std for P_pos
-				# start_time = time.time()
 				self.update_variance_sets(epoch_cur)
-				# print('test 4: ', time.time() - start_time)
+			np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
+			del self.candidate_nxt
+			del self.candidate_cur
+			del self.score_cand_cur
+			del self.score_cand_nxt
+			del self.score_pos_cur
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			return self.process_grad(server_model, self.neg_items[-1])
+
+	# def process_grad(self, server_model, negative_items):
+	# 	all_selected_items = list(set(self.positive_items + negative_items))
+	# 	M_v = (self.model - server_model).to('cpu')
+	# 	for param in M_v.parameters(): param.requires_grad = False
+	# 	# get all embeddings from pos and neg items
+	# 	M_v_user = M_v.embed_item.weight[all_selected_items]
+	# 	# get l2 norm
+	# 	norms_item = torch.norm(M_v_user, dim=1)
+	# 	alpha = 0.5
+	# 	topk_indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
+	# 	# get topk selected items
+	# 	# all param not in topk -> 0
+	# 	import pdb; pdb.set_trace()
+	# 	not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
+	# 	M_v.embed_item.weight[not_topk_items, :] = 0
+	# 	# require grad = True
+	# 	for param in M_v.parameters(): param.requires_grad = True
+	# 	# save updates
+	# 	return server_model + M_v.cuda(), not_topk_items
 
 	def process_grad(self, server_model, negative_items):
 		all_selected_items = list(set(self.positive_items + negative_items))
@@ -686,16 +708,18 @@ class Client():
 		M_v_user = M_v.embed_item.weight[all_selected_items]
 		# get l2 norm
 		norms_item = torch.norm(M_v_user, dim=1)
-		alpha = 0.5
-		topk_indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
-		# get topk selected items
-		# all param not in topk -> 0
-		not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
-		M_v.embed_item.weight[not_topk_items, :] = 0
+		## compute not_topK for alpha = 0.2 / 0.5 / 1.0
+		not_top = {}
+		for alp in [0.2, 0.5, 1.0]:
+			topk_indices = torch.topk(norms_item, int(alp * M_v_user.shape[0]))[1]
+			topk_item_ids = torch.tensor(all_selected_items)[topk_indices]
+			# import pdb; pdb.set_trace()
+			not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_item_ids)
+			not_top['p{}'.format(alp)] = not_topk_items.tolist()
 		# require grad = True
 		for param in M_v.parameters(): param.requires_grad = True
 		# save updates
-		return server_model + M_v.cuda()
+		return M_v, not_top
 
 	def test(self, test_data, test_backdoor, server_model = None):
 		"""
@@ -761,12 +785,12 @@ class Client():
 		# data = self.unpack(svr_pkg)[2]
 		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
-		important_weight = self.train(self.model.to(fmodule.device), model, round_num)
+		important_weight, not_top = self.train(self.model.to(fmodule.device), model, round_num)
 		self.model.to('cpu')
-		cpkg = self.pack(copy.deepcopy(self.model), important_weight)
+		cpkg = self.pack(copy.deepcopy(self.model), important_weight, not_top)
 		return cpkg
 
-	def pack(self, model, important_weight):
+	def pack(self, model, important_weight, not_top):
 		"""
 		Packing the package to be send to the server. The operations of compression
 		of encryption of the package should be done here.
@@ -778,7 +802,8 @@ class Client():
 		"""
 		return {
 			"model" : model,
-			"important_weight": important_weight
+			"important_weight": important_weight,
+			"not_top": not_top
 		}
 
 	def is_active(self):

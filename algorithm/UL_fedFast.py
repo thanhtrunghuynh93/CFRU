@@ -12,6 +12,8 @@ import torch
 import random
 import json
 import shutil
+
+
 class Server():
 	def __init__(self, option, model, clients, test_data = None, backtask_data = None):
 		# basic setting
@@ -81,11 +83,12 @@ class Server():
 			os.makedirs(self.path_save, exist_ok=True)
 
 	def run(self):
+		import time
 		"""
 		Start the federated learning symtem where the global model is trained iteratively.
 		"""
 		logger.time_start('Total Time Cost')
-
+		start_time = time.time()
 		## run()
 		for round in range(self.num_rounds+1):
 			print("--------------Round {}--------------".format(round))
@@ -100,6 +103,7 @@ class Server():
 			if logger.check_if_log(round, self.eval_interval): logger.log(self)
 
 		print("=================End==================")
+		print("Total time cost: ", time.time() - start_time)
 		logger.time_end('Total Time Cost')
 		# save results as .json file
 		logger.save(os.path.join('fedtask', self.option['task'], 'record', flw.output_filename(self.option, self)))
@@ -133,7 +137,6 @@ class Server():
 		# 	self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
 		# 	self.unlearn_time = logger.time_end('unlearning time')
 
-		# import pdb; pdb.set_trace()
 		# if t >= self.option['num_rounds'] - 5:
 		## compute updates:
 		grads_this_round = {}
@@ -283,6 +286,7 @@ class Server():
 				packages_received_from_clients.append(response_from_client_id)
 		else:
 			# computing in parallel
+			self.model.to('cpu')
 			pool = ThreadPool(min(self.num_threads, len(selected_clients)))
 			packages_received_from_clients = pool.map(self.communicate_with, selected_clients)
 			pool.close()
@@ -304,7 +308,9 @@ class Server():
 		svr_pkg = self.pack(client_id)
 		# listen for the client's response and return None if the client drops out
 		if self.clients[client_id].is_drop(): return None
-		return self.clients[client_id].reply(svr_pkg)
+		abc = self.clients[client_id].reply(svr_pkg)
+		print("done: ", client_id)
+		return abc
 
 	def pack(self, client_id):
 		"""
@@ -354,7 +360,6 @@ class Server():
 				c.set_learning_rate(self.lr)
 
 	def sample(self, t):
-		# import pdb; pdb.set_trace()
 		self.fixed_selected_clients[t] = [i for i in range(self.num_clients)]
 		##
 		if self.option['clean_model'] == 2:
@@ -495,7 +500,7 @@ class Client():
 		self.weight_decay = option['weight_decay']
 		self.reg_lambda = option['reg.lambda']
 		self.topN = option['topN']
-		self.model = model
+		self.model = model.to('cpu')
 		# system setting
 		self.malicious_users = option['malicious_users']
      	# the probability of dropout obey distribution beta(drop, 1). The larger 'drop' is, the more possible for a device to drop
@@ -597,7 +602,11 @@ class Client():
 			self.score_cand_nxt[c] = self.score_cand_nxt[c + 1]
 
 		# Utilize numpy random.choice to create the array with necessary condition
-		self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		# self.candidate_nxt[4] = np.random.choice(np.setdiff1d(np.arange(self.num_item), self.train_pos), [self.num_user, self.varset_size])
+		self.candidate_nxt[4] = np.empty([self.num_user, self.varset_size], dtype=np.int32)
+		for i in range(self.num_user):
+			valid_options = list(set(range(self.num_item)) - set(self.train_pos[i]))
+			self.candidate_nxt[4][i] = np.random.choice(valid_options, self.varset_size)
 		self.score_cand_nxt[4] = np.delete(self.score_cand_nxt[4], list(range(self.score_cand_nxt[4].shape[0])), 0)
 
 	def train(self, model, server_model, round_num):
@@ -608,6 +617,7 @@ class Client():
 			round_num:
 		:return
 		"""
+		model = model.cuda()
 		name_malicious_client = ['Client{:03d}'.format(num) for num in self.option['attacker']]
 		if self.name in name_malicious_client:
 			model.train()
@@ -624,7 +634,6 @@ class Client():
 				# neg_items_this_round.update(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
 				for batch_id, batch_data in enumerate(data_loader):
 					model.zero_grad()
-					# import pdb; pdb.set_trace()
 					loss = self.calculator.get_loss(model, batch_data, self.option)
 					loss.backward()
 					optimizer.step()
@@ -632,7 +641,6 @@ class Client():
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			if self.option['atk_method'] == 'fedFlipGrads':
-				# import pdb; pdb.set_trace()
 				update_client = model - server_model
 				self.model = server_model - update_client
 			return self.process_grad(server_model, self.neg_items[-1])
@@ -654,7 +662,6 @@ class Client():
 				data_loader.dataset.pos_sampling() # sample on positive training data
 				for batch_id, batch_data in enumerate(data_loader):
 					model.zero_grad()
-					# import pdb; pdb.set_trace()
 					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance(model, batch_data, self.var_config, epoch_cur, 
 										self.score_cand_cur, self.score_pos_cur, self.Mu_idx, self.candidate_cur, self.train_iddict, self.option)
 					neg_items_this_round.update(neg_items)
@@ -671,11 +678,14 @@ class Client():
 			del self.score_pos_cur
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
-			return self.process_grad(server_model, self.neg_items[-1])
-
+			processed_grad = self.process_grad(server_model, self.neg_items[-1])
+			return processed_grad
+		
 	def process_grad(self, server_model, negative_items):
 		all_selected_items = list(set(self.positive_items + negative_items))
-		M_v = (self.model - server_model).to('cpu')
+		
+		M_v = fmodule._model_sub_multiprocessing(self.model.to('cpu'), server_model).to('cpu')
+		# M_v = (self.model.to('cpu') - server_model).to('cpu')
 		for param in M_v.parameters(): param.requires_grad = False
 		# get all embeddings from pos and neg items
 		M_v_user = M_v.embed_item.weight[all_selected_items]
@@ -683,14 +693,15 @@ class Client():
 		norms_item = torch.norm(M_v_user, dim=1)
 		alpha = 0.5
 		topk_indices = torch.topk(norms_item, int(alpha * M_v_user.shape[0]))[1]
+		topk_item_ids = torch.tensor(all_selected_items)[topk_indices]
 		# get topk selected items
 		# all param not in topk -> 0
-		not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_indices)
+		not_topk_items = ~torch.isin(torch.arange(M_v.embed_item.weight.shape[0]), topk_item_ids)
 		M_v.embed_item.weight[not_topk_items, :] = 0
 		# require grad = True
 		for param in M_v.parameters(): param.requires_grad = True
 		# save updates
-		return server_model + M_v.cuda()
+		return server_model + M_v
 
 	def test(self, test_data, test_backdoor, server_model = None):
 		"""
@@ -754,11 +765,13 @@ class Client():
 		round_num = self.unpack(svr_pkg)[1]
 
 		# data = self.unpack(svr_pkg)[2]
-		# import pdb; pdb.set_trace()
 		fmodule._model_merge_(self.model, model)
 		important_weight = self.train(self.model.to(fmodule.device), model, round_num)
 		self.model.to('cpu')
+		important_weight.to('cpu')
+		print('test1')
 		cpkg = self.pack(copy.deepcopy(self.model), important_weight)
+		print('test2')
 		return cpkg
 
 	def pack(self, model, important_weight):
