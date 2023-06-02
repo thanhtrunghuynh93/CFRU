@@ -39,6 +39,8 @@ import torchvision.transforms as transforms
 from random import shuffle,randint,choice,sample
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
 import concurrent
+# import warnings
+# warnings.filterwarnings('error')
 
 
 def set_random_seed(seed=0):
@@ -736,15 +738,18 @@ class ClassifyCalculator(BasicTaskCalculator):
 		hisscore_candidates_all = np.concatenate([score_cand_all[:, user_batch[i]:user_batch[i]+1, np.reshape(negitems_candidates_all[i], [-1])] for i in range(len(user_batch))], axis=1)
 		hisscore_pos_all = np.expand_dims(np.concatenate([score_pos_all[:, user_batch[i]:user_batch[i]+1, train_iddict[user_batch[i]][item_batch[i]]] for i in range(len(user_batch))], axis=1), -1)
 		hislikelihood_candidates_all = 1 / (1 + np.exp(hisscore_pos_all - hisscore_candidates_all))
+		# try:
+		# except Warning:
+		# 	import pdb
+		# 	pdb.set_trace()
 		mean_candidates_all = np.mean(hislikelihood_candidates_all, axis=0)
-
 		variance_candidates_all = np.sqrt(np.mean((hislikelihood_candidates_all - mean_candidates_all) ** 2, axis=0))
 		likelihood_candidates_all = 1 / (1 + np.exp(np.expand_dims(ratings_positems, -1) - ratings_candidates_all))
 		epoch_scale = min(1, epoch_cur/var_config['warmup'])
 		alpha = var_config['alpha']
 
 		item_arg_all = np.argmax(likelihood_candidates_all + (alpha if alpha >= 0 else 0) * epoch_scale * variance_candidates_all, axis=1)
-		example_weight = np.ones((len(user_batch),1), dtype=np.float)
+		example_weight = np.ones((len(user_batch),1), dtype=float)
 		negitems = [candidate_cur[user_batch[i], negitems_candidates_all[i, item_arg_all[i]]] for i in range(len(user_batch))]
 
 		for i in range(len(user_batch)):

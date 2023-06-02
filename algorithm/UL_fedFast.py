@@ -309,7 +309,6 @@ class Server():
 		# listen for the client's response and return None if the client drops out
 		if self.clients[client_id].is_drop(): return None
 		abc = self.clients[client_id].reply(svr_pkg)
-		print("done: ", client_id)
 		return abc
 
 	def pack(self, client_id):
@@ -477,6 +476,7 @@ class Client():
 			os.makedirs(self.update_var_folder)
 		self.name = name
 		self.frequency = 0
+		self.num_threads = option['num_threads']
 		# create local dataset
 		self.train_data = train_data
 		self.users_set = users_set
@@ -639,10 +639,15 @@ class Client():
 					optimizer.step()
 				# update mean and std for P_pos
 			neg_items_this_round = list(neg_items_this_round)
+			model.to('cpu')
 			self.neg_items.append(neg_items_this_round)
 			if self.option['atk_method'] == 'fedFlipGrads':
-				update_client = model - server_model
-				self.model = server_model - update_client
+				if self.num_threads <= 1:
+					update_client = model - server_model
+					self.model = server_model - update_client
+				else:
+					update_client = fmodule._model_sub_multiprocessing(model, server_model).to('cpu')
+					self.model = fmodule._model_sub_multiprocessing(server_model - update_client.to('cpu')).to('cpu')
 			return self.process_grad(server_model, self.neg_items[-1])
 		else:
 			# model.train()
@@ -683,9 +688,10 @@ class Client():
 		
 	def process_grad(self, server_model, negative_items):
 		all_selected_items = list(set(self.positive_items + negative_items))
-		
-		M_v = fmodule._model_sub_multiprocessing(self.model.to('cpu'), server_model).to('cpu')
-		# M_v = (self.model.to('cpu') - server_model).to('cpu')
+		if self.num_threads <= 1:
+			M_v = (self.model - server_model).to('cpu')
+		else:
+			M_v = fmodule._model_sub_multiprocessing(self.model.to('cpu'), server_model).to('cpu')
 		for param in M_v.parameters(): param.requires_grad = False
 		# get all embeddings from pos and neg items
 		M_v_user = M_v.embed_item.weight[all_selected_items]
@@ -701,7 +707,10 @@ class Client():
 		# require grad = True
 		for param in M_v.parameters(): param.requires_grad = True
 		# save updates
-		return server_model + M_v
+		if self.num_threads <= 1:
+			return server_model + M_v.cuda()
+		else:
+			return fmodule._model_add_multiprocessing(server_model, M_v)
 
 	def test(self, test_data, test_backdoor, server_model = None):
 		"""
@@ -769,9 +778,7 @@ class Client():
 		important_weight = self.train(self.model.to(fmodule.device), model, round_num)
 		self.model.to('cpu')
 		important_weight.to('cpu')
-		print('test1')
 		cpkg = self.pack(copy.deepcopy(self.model), important_weight)
-		print('test2')
 		return cpkg
 
 	def pack(self, model, important_weight):

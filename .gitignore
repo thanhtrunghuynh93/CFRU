@@ -14,3 +14,4 @@
 *.txt
 *.npz
 *.sh
+*pymp*
