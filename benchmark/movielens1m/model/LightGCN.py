@@ -55,7 +55,7 @@ class Model(FModule):
         coo = norm_adj_mat.tocoo()
         i = torch.LongTensor([coo.row, coo.col])
         v = torch.from_numpy(coo.data).float()
-        return torch.sparse.FloatTensor(i, v, coo.shape)
+        return torch.sparse.FloatTensor(i, v, coo.shape).to_dense()
     
     def to(self, device):
         self.sparse_norm_adj = self.sparse_norm_adj.to(device)
