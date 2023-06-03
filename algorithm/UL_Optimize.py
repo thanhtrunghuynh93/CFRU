@@ -456,26 +456,11 @@ class Server():
 
 class Client():
 	def __init__(self, option, name='', model=None, train_data=None, users_set=None):
-		main_path_save = os.path.join('./fedtasksave', option['task'],
-									"ULTest_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
-										option['model'],
-										option['num_rounds'],
-										option['proportion'],
-										option['alpha'],
-										option['seed'],
-										option['atk_method']
-									),
-									'record')
-		self.init_var_folder = os.path.join(main_path_save, 'init_var')
-		if not os.path.exists(self.init_var_folder):
-			os.makedirs(self.init_var_folder)
-		self.update_var_folder = os.path.join(main_path_save, 'update_var')
-		if not os.path.exists(self.update_var_folder):
-			os.makedirs(self.update_var_folder)
 		self.name = name
 		self.frequency = 0
 		# create local dataset
 		self.train_data = train_data
+		self.num_threads = option['num_threads']
 		self.users_set = users_set
 		self.neg_items = []
 		# positive items
@@ -540,43 +525,29 @@ class Client():
 				poscnt += 1
 				self.train_pos[i].append(p)
 		print("MAX POS IDX: %d"%self.max_posid)
-		if	not os.path.exists(os.path.join(self.init_var_folder, str(self.name) + ".npz")):
-			# init the two candidate sets for monitoring variance
-			# self.candidate_cur = np.random.choice(self.num_item, [self.num_user, self.varset_size])
-			# for i in range(self.num_user):
-			# 	for j in range(self.varset_size):
-			# 		while self.candidate_cur[i, j] in train_set[i]:
-			# 			self.candidate_cur[i, j] = random.randint(0, self.num_item - 1)
+		# if	not os.path.exists(os.path.join(self.init_var_folder, str(self.name) + ".npz")):
+		self.candidate_cur = np.empty([self.num_user_client, self.varset_size], dtype=np.int32)
+		for i in range(self.num_user_client):
+			valid_options = list(set(range(self.num_item)) - set(train_set[self.users_set[i]]))
+			self.candidate_cur[i] = np.random.choice(valid_options, self.varset_size)
 
-			candidate_cur = np.empty([self.num_user_client, self.varset_size], dtype=np.int32)
+		self.candidate_nxt = [np.empty([self.num_user_client, self.varset_size], dtype=np.int32) for _ in range(5)]
+
+		for c in range(5):
 			for i in range(self.num_user_client):
 				valid_options = list(set(range(self.num_item)) - set(train_set[self.users_set[i]]))
-				candidate_cur[i] = np.random.choice(valid_options, self.varset_size)
-
-			# self.candidate_nxt = [np.random.choice(self.num_item, [self.num_user, self.varset_size]) for _ in range(5)]
-			# for c in range(5):
-			# 	for i in range(self.num_user):
-			# 		for j in range(self.varset_size):
-			# 			while self.candidate_nxt[c][i, j] in train_set[i]:
-			# 				self.candidate_nxt[c][i, j] = random.randint(0, self.num_item - 1)
-
-			candidate_nxt = [np.empty([self.num_user_client, self.varset_size], dtype=np.int32) for _ in range(5)]
-
-			for c in range(5):
-				for i in range(self.num_user_client):
-					valid_options = list(set(range(self.num_item)) - set(train_set[self.users_set[i]]))
-					candidate_nxt[c][i] = np.random.choice(valid_options, self.varset_size)
+				self.candidate_nxt[c][i] = np.random.choice(valid_options, self.varset_size)
 
 
-			score_cand_cur = np.array([EvalUser.predict_fast_opt(self.model, self.num_user_client, self.num_item, parallel_users=100, predict_data=candidate_cur, users_set=self.users_set)])
-			score_cand_nxt = [np.zeros((0, self.num_user_client, self.varset_size)) for _ in range(5)]
-			score_pos_cur = np.array([EvalUser.predict_pos_opt(self.model, self.num_user_client, self.max_posid, parallel_users=100, predict_data=self.train_pos, users_set=self.users_set)])
-			np.savez(os.path.join(self.init_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
+		self.score_cand_cur = np.array([EvalUser.predict_fast_opt(self.model, self.num_user_client, self.num_item, parallel_users=100, predict_data=self.candidate_cur, users_set=self.users_set)])
+		self.score_cand_nxt = [np.zeros((0, self.num_user_client, self.varset_size)) for _ in range(5)]
+		self.score_pos_cur = np.array([EvalUser.predict_pos_opt(self.model, self.num_user_client, self.max_posid, parallel_users=100, predict_data=self.train_pos, users_set=self.users_set)])
+			# np.savez(os.path.join(self.init_var_folder, str(self.name) + ".npz"), candidate_cur=candidate_cur, candidate_nxt=candidate_nxt, score_cand_cur=score_cand_cur, score_cand_nxt=score_cand_nxt, score_pos_cur=score_pos_cur)
 		self.Mu_idx = []  # All possible items or non-fn items
 		for i in range(self.num_user_client):
 			Mu_idx_tmp = random.sample(list(range(self.varset_size)), self.var_config['S1'])
 			self.Mu_idx.append(Mu_idx_tmp)
-		shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
+		# shutil.copyfile(os.path.join(self.init_var_folder, str(self.name) + ".npz"), os.path.join(self.update_var_folder, str(self.name) + ".npz"))
 
 	def update_variance_sets(self, epoch_count):
 
@@ -623,11 +594,10 @@ class Client():
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
-			
+			if self.option['atk_method'] == 'fedAttack':
+				neg_items_this_round.update(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
 			for iter in range(self.epochs):
-				if self.option['atk_method'] == 'fedAttack':
-					neg_items_this_round.update(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
-				else:
+				if self.option['atk_method'] == 'fedFlipGrads':
 					neg_items_this_round.update(data_loader.dataset.ng_sample_original())
 				# neg_items_this_round.update(data_loader.dataset.ng_sample_fedatk(self.model, topK = 1000, malicious_users = self.malicious_users))
 				for batch_id, batch_data in enumerate(data_loader):
@@ -647,12 +617,12 @@ class Client():
 		else:
 			# model.train()
 			print(self.datavol)
-			loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
-			self.candidate_nxt=list(loaded_npz["candidate_nxt"])
-			self.candidate_cur=loaded_npz["candidate_cur"]
-			self.score_cand_cur=loaded_npz["score_cand_cur"]
-			self.score_cand_nxt=list(loaded_npz["score_cand_nxt"])
-			self.score_pos_cur=loaded_npz["score_pos_cur"]
+			# loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
+			# self.candidate_nxt=list(loaded_npz["candidate_nxt"])
+			# self.candidate_cur=loaded_npz["candidate_cur"]
+			# self.score_cand_cur=loaded_npz["score_cand_cur"]
+			# self.score_cand_nxt=list(loaded_npz["score_cand_nxt"])
+			# self.score_pos_cur=loaded_npz["score_pos_cur"]
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
@@ -663,7 +633,7 @@ class Client():
 				for batch_id, batch_data in enumerate(data_loader):
 					model.zero_grad()
 					# import pdb; pdb.set_trace()
-					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance_opt(model, batch_data, self.users_set, self.var_config, epoch_cur, 
+					loss, self.Mu_idx, neg_items = self.calculator.get_loss_variance(model, batch_data, self.users_set, self.var_config, epoch_cur, 
 										self.score_cand_cur, self.score_pos_cur, self.Mu_idx, self.candidate_cur, self.train_iddict, self.option)
 					neg_items_this_round.update(neg_items)
 					# backward
@@ -671,12 +641,12 @@ class Client():
 					optimizer.step()
 				# update mean and std for P_pos
 				self.update_variance_sets(epoch_cur)
-			np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
-			del self.candidate_nxt
-			del self.candidate_cur
-			del self.score_cand_cur
-			del self.score_cand_nxt
-			del self.score_pos_cur
+			# np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
+			# del self.candidate_nxt
+			# del self.candidate_cur
+			# del self.score_cand_cur
+			# del self.score_cand_nxt
+			# del self.score_pos_cur
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			return self.process_grad(server_model, self.neg_items[-1])

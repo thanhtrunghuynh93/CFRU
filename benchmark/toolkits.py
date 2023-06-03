@@ -722,71 +722,71 @@ class ClassifyCalculator(BasicTaskCalculator):
 		loss = model.handle_loss(output, option)
 		return loss
 	
-	def get_loss_variance(self, model, data, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict, option=None):
-		model.eval()
-		device = next(model.parameters()).device
-		tdata = self.data_to_device(data, device)
-		user_batch = data[0].tolist()
-		item_batch = data[1].tolist()
+	# def get_loss_variance(self, model, data, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict, option=None):
+	# 	model.eval()
+	# 	device = next(model.parameters()).device
+	# 	tdata = self.data_to_device(data, device)
+	# 	user_batch = data[0].tolist()
+	# 	item_batch = data[1].tolist()
 
-		negitems_candidates_all = np.array([Mu_idx[u] for u in user_batch])
-		ratings_positems = model.get_score([tdata[0], tdata[1]]).squeeze(-1).detach().cpu().numpy()
-		Mu_items_all = torch.tensor(np.array([candidate_cur[user_batch[i], negitems_candidates_all[i]] for i in range(len(user_batch))])).view(-1, 1).long().to(device)
-		users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1']).view(-1, 1).long().to(device)
-		ratings_candidates_all = model.get_score([users, Mu_items_all]).view(-1, var_config['S1']).detach().cpu().numpy()
+	# 	negitems_candidates_all = np.array([Mu_idx[u] for u in user_batch])
+	# 	ratings_positems = model.get_score([tdata[0], tdata[1]]).squeeze(-1).detach().cpu().numpy()
+	# 	Mu_items_all = torch.tensor(np.array([candidate_cur[user_batch[i], negitems_candidates_all[i]] for i in range(len(user_batch))])).view(-1, 1).long().to(device)
+	# 	users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1']).view(-1, 1).long().to(device)
+	# 	ratings_candidates_all = model.get_score([users, Mu_items_all]).view(-1, var_config['S1']).detach().cpu().numpy()
 
-		hisscore_candidates_all = np.concatenate([score_cand_all[:, user_batch[i]:user_batch[i]+1, np.reshape(negitems_candidates_all[i], [-1])] for i in range(len(user_batch))], axis=1)
-		hisscore_pos_all = np.expand_dims(np.concatenate([score_pos_all[:, user_batch[i]:user_batch[i]+1, train_iddict[user_batch[i]][item_batch[i]]] for i in range(len(user_batch))], axis=1), -1)
-		hislikelihood_candidates_all = 1 / (1 + np.exp(hisscore_pos_all - hisscore_candidates_all))
-		# try:
-		# except Warning:
-		# 	import pdb
-		# 	pdb.set_trace()
-		mean_candidates_all = np.mean(hislikelihood_candidates_all, axis=0)
-		variance_candidates_all = np.sqrt(np.mean((hislikelihood_candidates_all - mean_candidates_all) ** 2, axis=0))
-		likelihood_candidates_all = 1 / (1 + np.exp(np.expand_dims(ratings_positems, -1) - ratings_candidates_all))
-		epoch_scale = min(1, epoch_cur/var_config['warmup'])
-		alpha = var_config['alpha']
+	# 	hisscore_candidates_all = np.concatenate([score_cand_all[:, user_batch[i]:user_batch[i]+1, np.reshape(negitems_candidates_all[i], [-1])] for i in range(len(user_batch))], axis=1)
+	# 	hisscore_pos_all = np.expand_dims(np.concatenate([score_pos_all[:, user_batch[i]:user_batch[i]+1, train_iddict[user_batch[i]][item_batch[i]]] for i in range(len(user_batch))], axis=1), -1)
+	# 	hislikelihood_candidates_all = 1 / (1 + np.exp(hisscore_pos_all - hisscore_candidates_all))
+	# 	# try:
+	# 	# except Warning:
+	# 	# 	import pdb
+	# 	# 	pdb.set_trace()
+	# 	mean_candidates_all = np.mean(hislikelihood_candidates_all, axis=0)
+	# 	variance_candidates_all = np.sqrt(np.mean((hislikelihood_candidates_all - mean_candidates_all) ** 2, axis=0))
+	# 	likelihood_candidates_all = 1 / (1 + np.exp(np.expand_dims(ratings_positems, -1) - ratings_candidates_all))
+	# 	epoch_scale = min(1, epoch_cur/var_config['warmup'])
+	# 	alpha = var_config['alpha']
 
-		item_arg_all = np.argmax(likelihood_candidates_all + (alpha if alpha >= 0 else 0) * epoch_scale * variance_candidates_all, axis=1)
-		example_weight = np.ones((len(user_batch),1), dtype=float)
-		negitems = [candidate_cur[user_batch[i], negitems_candidates_all[i, item_arg_all[i]]] for i in range(len(user_batch))]
+	# 	item_arg_all = np.argmax(likelihood_candidates_all + (alpha if alpha >= 0 else 0) * epoch_scale * variance_candidates_all, axis=1)
+	# 	example_weight = np.ones((len(user_batch),1), dtype=float)
+	# 	negitems = [candidate_cur[user_batch[i], negitems_candidates_all[i, item_arg_all[i]]] for i in range(len(user_batch))]
 
-		for i in range(len(user_batch)):
-			Mu_set = set(Mu_idx[user_batch[i]])
-			while len(Mu_idx[user_batch[i]]) < var_config['S1'] * (1 + var_config['S2_div_S1']):
-				random_item = random.randint(0, candidate_cur.shape[1] - 1)
-				while random_item in Mu_set:
-					random_item = random.randint(0, candidate_cur.shape[1] - 1)
-				Mu_idx[user_batch[i]].append(random_item)
+	# 	for i in range(len(user_batch)):
+	# 		Mu_set = set(Mu_idx[user_batch[i]])
+	# 		while len(Mu_idx[user_batch[i]]) < var_config['S1'] * (1 + var_config['S2_div_S1']):
+	# 			random_item = random.randint(0, candidate_cur.shape[1] - 1)
+	# 			while random_item in Mu_set:
+	# 				random_item = random.randint(0, candidate_cur.shape[1] - 1)
+	# 			Mu_idx[user_batch[i]].append(random_item)
 
-		negitems_mu_candidates = np.array([Mu_idx[u] for u in user_batch])
-		negitems_mu = torch.tensor(np.array([candidate_cur[user_batch[i], negitems_mu_candidates[i]] for i in range(len(user_batch))])).view(-1, 1).long().to(device)
-		users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1'] * (1 + var_config['S2_div_S1'])).view(-1, 1).long().to(device)
-		ratings_mu_candidates = model.get_score([users, negitems_mu]).view(-1, var_config['S1'] * (1 + var_config['S2_div_S1'])).detach().cpu().numpy()
+	# 	negitems_mu_candidates = np.array([Mu_idx[u] for u in user_batch])
+	# 	negitems_mu = torch.tensor(np.array([candidate_cur[user_batch[i], negitems_mu_candidates[i]] for i in range(len(user_batch))])).view(-1, 1).long().to(device)
+	# 	users = torch.tensor(user_batch).view(-1, 1).repeat(1, var_config['S1'] * (1 + var_config['S2_div_S1'])).view(-1, 1).long().to(device)
+	# 	ratings_mu_candidates = model.get_score([users, negitems_mu]).view(-1, var_config['S1'] * (1 + var_config['S2_div_S1'])).detach().cpu().numpy()
 
-		# pre-process
-		min_vals = np.min(ratings_mu_candidates, axis=1, keepdims=True)
-		max_vals = np.max(ratings_mu_candidates, axis=1, keepdims=True)
+	# 	# pre-process
+	# 	min_vals = np.min(ratings_mu_candidates, axis=1, keepdims=True)
+	# 	max_vals = np.max(ratings_mu_candidates, axis=1, keepdims=True)
 
-		ratings_mu_candidates = (ratings_mu_candidates - min_vals) / (max_vals - min_vals)
-		# ratings_mu_candidates = ratings_mu_candidates / var_config['temperature']
-		ratings_mu_candidates = np.exp(ratings_mu_candidates) / np.reshape(np.sum(np.exp(ratings_mu_candidates), axis=1), [-1, 1])
-		user_set = set()
-		for i in range(len(user_batch)):
-			if user_batch[i] not in user_set:
-				user_set.add(user_batch[i])
-				cache_arg = np.random.choice(var_config['S1'] * (1 + var_config['S2_div_S1']), var_config['S1'], p=ratings_mu_candidates[i], replace=False)
-				Mu_idx[user_batch[i]] = np.array(Mu_idx[user_batch[i]])[cache_arg].tolist()
+	# 	ratings_mu_candidates = (ratings_mu_candidates - min_vals) / (max_vals - min_vals)
+	# 	# ratings_mu_candidates = ratings_mu_candidates / var_config['temperature']
+	# 	ratings_mu_candidates = np.exp(ratings_mu_candidates) / np.reshape(np.sum(np.exp(ratings_mu_candidates), axis=1), [-1, 1])
+	# 	user_set = set()
+	# 	for i in range(len(user_batch)):
+	# 		if user_batch[i] not in user_set:
+	# 			user_set.add(user_batch[i])
+	# 			cache_arg = np.random.choice(var_config['S1'] * (1 + var_config['S2_div_S1']), var_config['S1'], p=ratings_mu_candidates[i], replace=False)
+	# 			Mu_idx[user_batch[i]] = np.array(Mu_idx[user_batch[i]])[cache_arg].tolist()
 
-		model.train()
-		negitems = torch.tensor(negitems).view(-1, 1).squeeze(-1)
-		output = model([tdata[0], tdata[1], negitems.long().to(device)])
-		loss = model.handle_loss(output, option)
+	# 	model.train()
+	# 	negitems = torch.tensor(negitems).view(-1, 1).squeeze(-1)
+	# 	output = model([tdata[0], tdata[1], negitems.long().to(device)])
+	# 	loss = model.handle_loss(output, option)
 
-		return loss, Mu_idx, negitems.tolist()
+	# 	return loss, Mu_idx, negitems.tolist()
 
-	def get_loss_variance_opt(self, model, data, users_set, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict, option=None):
+	def get_loss_variance(self, model, data, users_set, var_config, epoch_cur, score_cand_all, score_pos_all, Mu_idx, candidate_cur, train_iddict, option=None):
 		# map current batch to index in list users
 		def find_indices(list_user_batch, list_user_client):
 			indices = [list_user_client.index(element) for element in list_user_batch]

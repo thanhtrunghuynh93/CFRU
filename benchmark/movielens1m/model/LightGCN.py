@@ -111,6 +111,14 @@ class Model(FModule):
         _, indices = torch.topk(prediction_i, top_k)
         return indices
 
+    def predict_user(self, user, topK):
+        cos = nn.CosineSimilarity(dim=1, eps=1e-6)
+        user_emb = self.embed_user(torch.Tensor([user]).long().cuda())
+        similarities = cos(user_emb.data, self.embed_item.weight.data)
+        _, top_indices = torch.topk(similarities, topK, largest=True)
+        _, bot_indices = torch.topk(similarities, topK, largest=False)
+        return top_indices, bot_indices
+
 def bpr_loss(user_emb, pos_item_emb, neg_item_emb):
         pos_score = torch.mul(user_emb, pos_item_emb).sum(dim=1)
         neg_score = torch.mul(user_emb, neg_item_emb).sum(dim=1)
