@@ -55,20 +55,25 @@ class Model(FModule):
         coo = norm_adj_mat.tocoo()
         i = torch.LongTensor([coo.row, coo.col])
         v = torch.from_numpy(coo.data).float()
-        return torch.sparse.FloatTensor(i, v, coo.shape).to_dense()
+        sparse_tensor = torch.sparse.FloatTensor(i, v, coo.shape)
+        self.sparse_indices = sparse_tensor._indices()
+        self.sparse_values = sparse_tensor._values()
+        self.sparse_shape = sparse_tensor.shape
+        return None
     
     def to(self, device):
-        self.sparse_norm_adj = self.sparse_norm_adj.to(device)
+        # self.sparse_norm_adj = self.sparse_norm_adj.to(device)
         return super(Model, self).to(device)
 
     def forward(self, data):
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(FModule.device)
         user = data[0]
         item_i = data[1]
         item_j = data[2]
         ego_embeddings = torch.cat([self.embed_user.weight, self.embed_item.weight], 0)
         all_embeddings = [ego_embeddings]
         for k in range(self.layers):
-            ego_embeddings = torch.sparse.mm(self.sparse_norm_adj, ego_embeddings)
+            ego_embeddings = torch.sparse.mm(sparse_norm_adj, ego_embeddings)
             all_embeddings += [ego_embeddings]
         all_embeddings = torch.stack(all_embeddings, dim=1)
         all_embeddings = torch.mean(all_embeddings, dim=1)
@@ -81,13 +86,14 @@ class Model(FModule):
         return user_embedding, item_i_embedding, item_j_embedding
     
     def get_score(self, data):
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(FModule.device)
         user = data[0]
         item_i = data[1]
         # item_j = data[2]
         ego_embeddings = torch.cat([self.embed_user.weight, self.embed_item.weight], 0)
         all_embeddings = [ego_embeddings]
         for k in range(self.layers):
-            ego_embeddings = torch.sparse.mm(self.sparse_norm_adj, ego_embeddings)
+            ego_embeddings = torch.sparse.mm(sparse_norm_adj, ego_embeddings)
             all_embeddings += [ego_embeddings]
         all_embeddings = torch.stack(all_embeddings, dim=1)
         all_embeddings = torch.mean(all_embeddings, dim=1)

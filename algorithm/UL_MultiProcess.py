@@ -12,7 +12,8 @@ import torch
 import random
 import json
 import shutil
-
+import warnings
+warnings.filterwarnings('ignore')
 
 class Server():
 	def __init__(self, option, model, clients, test_data = None, backtask_data = None):
@@ -65,7 +66,7 @@ class Server():
 		self.fixed_selected_clients = [[] for i in range(self.num_rounds+1)]
 
 		## code from fedavg
-		self.path_save = os.path.join('fedtasksave', self.option['task'],
+		self.path_save = os.path.join('/mnt/disk2/bangnt/RecUnlearn/fedtasksave', self.option['task'],
 									"ULMulti_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['model'],
 										option['num_rounds'],
@@ -469,7 +470,15 @@ class Client():
 		self.init_var_folder = os.path.join(main_path_save, 'init_var')
 		if not os.path.exists(self.init_var_folder):
 			os.makedirs(self.init_var_folder)
-		self.update_var_folder = os.path.join(main_path_save, 'update_var')
+		self.update_var_folder = os.path.join(main_path_save, option['task'],
+									"ULMulti_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+										option['model'],
+										option['num_rounds'],
+										option['proportion'],
+										option['alpha'],
+										option['seed'],
+										option['atk_method']
+									), 'update_var')
 		if not os.path.exists(self.update_var_folder):
 			os.makedirs(self.update_var_folder)
 		self.name = name
@@ -630,7 +639,7 @@ class Client():
 					self.model = server_model - update_client
 				else:
 					update_client = fmodule._model_sub_multiprocessing(model, server_model).to('cpu')
-					self.model = fmodule._model_sub_multiprocessing(server_model - update_client).to('cpu')
+					self.model = fmodule._model_sub_multiprocessing(server_model, update_client).to('cpu')
 			return self.process_grad(server_model, self.neg_items[-1])
 		else:
 			# model.train()
