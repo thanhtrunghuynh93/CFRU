@@ -67,6 +67,14 @@ class Model(FModule):
         label = data[1].float()
         return loss_func(prediction, label)
     
+    def process_input(self, data, device=None):
+        users = torch.cat((data[0], data[0]), dim=0)
+        items = torch.cat((data[1], data[2]), dim=0)
+        pos_label = torch.tensor([1 for _ in range(data[1].shape[0])])
+        neg_label = torch.tensor([0 for _ in range(data[2].shape[0])])
+        labels = torch.cat((pos_label, neg_label), dim=0).to(device)
+        return [users, items, labels]
+    
     def handle_kd_loss(self, teacher_output, student_output):
         kl_loss = torch.nn.KLDivLoss(reduction="batchmean")
         def dist_loss(teacher, student, T=1):

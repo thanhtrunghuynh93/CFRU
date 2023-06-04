@@ -848,7 +848,9 @@ class ClassifyCalculator(BasicTaskCalculator):
 
 		model.train()
 		negitems = torch.tensor(negitems).view(-1, 1).squeeze(-1)
-		output = model([tdata[0], tdata[1], negitems.long().to(device)])
+		input_model = model.process_input([tdata[0], tdata[1], negitems.long().to(device)], device=device)
+		# output = model([tdata[0], tdata[1], negitems.long().to(device)])
+		output = model(input_model)
 		loss = model.handle_loss(output, option)
 
 		return loss, Mu_idx, negitems.tolist()

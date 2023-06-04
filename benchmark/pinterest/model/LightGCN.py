@@ -229,7 +229,7 @@ class Model(FModule):
         return super(Model, self).to(device)
 
     def forward(self, data):
-        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(FModule.device)
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).cuda()
         user = data[0]
         item_i = data[1]
         item_j = data[2]
@@ -249,7 +249,7 @@ class Model(FModule):
         return user_embedding, item_i_embedding, item_j_embedding
     
     def get_score(self, data):
-        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(FModule.device)
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).cuda()
         user = data[0]
         item_i = data[1]
         # item_j = data[2]
@@ -274,6 +274,9 @@ class Model(FModule):
         pos_item_emb = data[1]
         neg_item_emb = data[2]
         return bpr_loss(user_emb, pos_item_emb, neg_item_emb) + l2_reg_loss(option['reg.lambda'], user_emb, pos_item_emb, neg_item_emb)/option['batch_size']
+    
+    def process_input(self, data, device=None):
+        return data
     
     def handle_test(self, data, top_k):
         prediction_i = (data[0] * data[1]).sum(dim=-1)
