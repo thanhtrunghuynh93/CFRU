@@ -1,5 +1,5 @@
-# Fast-FedUL
-Repo for 'Distillation-free federated unlearning with provable robustness'
+# CFRU
+Repo for 'Certified Unlearning for Federated Recommendation'
 
 ## QuickStart
 
