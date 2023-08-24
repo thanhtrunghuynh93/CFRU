@@ -66,7 +66,7 @@ class Server():
 		self.fixed_selected_clients = [[] for i in range(self.num_rounds+1)]
 
 		## code from fedavg
-		self.path_save = os.path.join('/mnt/disk2/bangnt/RecUnlearn/fedtasksave', self.option['task'],
+		self.path_save = os.path.join('fedtasksave', self.option['task'],
 									"ULMulti_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['model'],
 										option['num_rounds'],
@@ -462,7 +462,7 @@ class Server():
 
 class Client():
 	def __init__(self, option, name='', model=None, train_data=None, users_set=None):
-		main_path_save = os.path.join('/mnt/disk2/bangnt/RecUnlearn/fedtasksave',
+		main_path_save = os.path.join('fedtasksave',
 									"{}/{}_clients".format(
 										option['task'].split("_")[0],
 										option['task'].split("_")[1][4:]

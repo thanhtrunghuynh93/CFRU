@@ -64,7 +64,7 @@ def main():
     server = flw.initialize(option)
                    # start federated optimization
     server.run()
-    print(server.round_selected)
+    # print(server.round_selected)
 
 if __name__ == '__main__':
     main()

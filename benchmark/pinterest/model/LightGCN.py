@@ -229,7 +229,7 @@ class Model(FModule):
         return super(Model, self).to(device)
 
     def forward(self, data):
-        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).cuda()
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(next(self.parameters()).device)
         user = data[0]
         item_i = data[1]
         item_j = data[2]
@@ -249,7 +249,7 @@ class Model(FModule):
         return user_embedding, item_i_embedding, item_j_embedding
     
     def get_score(self, data):
-        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).cuda()
+        sparse_norm_adj = torch.sparse_coo_tensor(self.sparse_indices, self.sparse_values, self.sparse_shape).to(next(self.parameters()).device)   
         user = data[0]
         item_i = data[1]
         # item_j = data[2]

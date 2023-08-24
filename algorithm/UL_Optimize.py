@@ -64,8 +64,9 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"ULOpt_{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+									"ULOpt_{}_Mu{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['model'],
+										option['S1'],
 										option['num_rounds'],
 										option['proportion'],
 										self.alpha,
@@ -492,7 +493,7 @@ class Client():
 		# for variance-based negative sampling
 		self.varset_size = 3000 # size of candidate for var monitor
 		self.var_config = {
-			'S1': 8, # size of M_u
+			'S1': option['S1'], # size of M_u = 8???
 			'S2_div_S1': 8, # S2/S1 where S2 is size of ~M_u (uniformly sample from negative items pool) 8/8
 			'alpha': 5.0,
 			'warmup': 50,
@@ -641,12 +642,6 @@ class Client():
 					optimizer.step()
 				# update mean and std for P_pos
 				self.update_variance_sets(epoch_cur)
-			# np.savez(os.path.join(self.update_var_folder, str(self.name) + ".npz"), candidate_cur=self.candidate_cur, candidate_nxt=self.candidate_nxt, score_cand_cur=self.score_cand_cur, score_cand_nxt=self.score_cand_nxt, score_pos_cur=self.score_pos_cur)
-			# del self.candidate_nxt
-			# del self.candidate_cur
-			# del self.score_cand_cur
-			# del self.score_cand_nxt
-			# del self.score_pos_cur
 			neg_items_this_round = list(neg_items_this_round)
 			self.neg_items.append(neg_items_this_round)
 			return self.process_grad(server_model, self.neg_items[-1])
