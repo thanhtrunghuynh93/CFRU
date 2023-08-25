@@ -8,8 +8,6 @@ import os
 import utils.fmodule
 import ujson
 import time
-import copy
-# from pathos.multiprocessing import ProcessPool
 
 sample_list=['uniform', 'md', 'active']
 agg_list=['uniform', 'weighted_scale', 'weighted_com', 'none']

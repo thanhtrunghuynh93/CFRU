@@ -6,7 +6,6 @@
 /algorithm/fedrl_utils/baseline
 /algorithm/kd_utils/
 /fedtask/**
-**/data/**
 /fedtasksave/**
 /result/
 .vscode*
