@@ -3,15 +3,15 @@ Repo for 'Certified Unlearning for Federated Recommendation'
 
 ## QuickStart
 
-**First**, run the command below to get the ARDIS dataset (which is used as backdoor data for MNIST dataset):
+**First**, run the command below to get the MovieLens 1M Dataset (do the same for the case of Pinterest dataset):
 
 ```sh
 # change to the ARDIS_DATASET_IV folder
-cd customdata/ARDIS_DATASET_IV
+cd benchmark/movielens1m/data
 # unrar ARDIS_DATASET
-unrar e ARDIS_DATASET_IV.rar
+unrar e movielens1m.rar
 # return to the root folder
-cd ...
+cd ....
 ```
 
 **Second**, run the command below to get the splited dataset MNIST:
