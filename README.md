@@ -3,7 +3,7 @@ Repo for 'Certified Unlearning for Federated Recommendation'
 
 ## QuickStart
 
-**First**, run the command below to get the MovieLens 1M Dataset (do the same for the case of Pinterest dataset):
+**First**, run the command below to get the MovieLens-1M Dataset (do the same for the case of Pinterest dataset):
 
 ```sh
 # change to the ARDIS_DATASET_IV folder
@@ -14,7 +14,7 @@ unrar e movielens1m.rar
 cd ....
 ```
 
-**Second**, run the command below to get the splited dataset MNIST:
+**Second**, run the command below to get the splited dataset MovieLens-1M:
 
 ```sh
 bash gen_data.sh

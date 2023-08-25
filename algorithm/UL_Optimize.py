@@ -115,33 +115,6 @@ class Server():
 
 		#  Process Unlearning
 		# start algorithm
-		# save grads
-		# self.process_grad_original(important_weights, t)
-		# # find attack_clients
-		# attack_clients = []
-		# for cid in self.selected_clients:
-		# 	if cid in self.option['attacker']:
-		# 		attack_clients.append(cid)
-		# # compute beta for this round
-		# self.update_beta()
-		# # # unlearning
-		# if len(attack_clients) >= 1:
-		# 	# self.all_attack_clients_id = list(set(self.all_attack_clients_id).union(attack_clients))
-		# 	round_attack, attackers_round = self.getAttacker_rounds(attack_clients)
-		# 	# unlearn
-		# 	# if t >= self.option['num_rounds'] - 5:
-		# 	logger.time_start('unlearning time')
-		# 	self.unlearn_term = self.compute_unlearn_term(round_attack, attackers_round, t)
-		# 	self.unlearn_time = logger.time_end('unlearning time')
-
-		# import pdb; pdb.set_trace()
-		# if t >= self.option['num_rounds'] - 5:
-		## compute updates:
-		# grads_this_round = {}
-		# for idx in range(len(self.selected_clients)):
-		# 	cid = self.selected_clients[idx]
-		# 	grads_this_round[str(cid)] = (self.model - important_weights[idx]).to('cpu') 
-		# self.save_models(t, models, self.unlearn_time)
 		self.save_important_update(t, important_weights, models, not_tops)
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
@@ -158,40 +131,6 @@ class Server():
 			"server_model": self.model,
 			"client_model": models,
 			"not_top": not_tops
-		}
-
-		pickle.dump(save_logs,
-					open(os.path.join(self.path_save, "history" + str(round_num) + ".pkl"), 'wb'),
-					pickle.HIGHEST_PROTOCOL)
-		print("Save  ", round_num)
-
-	def save_models(self, round_num, models, unlearn_time):
-		# if round_num >= self.option['num_rounds'] - 5:
-		# aggregate
-		temp_model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
-		# model clean with algo3
-		clean_model = temp_model + self.unlearn_term
-		# test on clients
-		client_test_metrics, client_backdoor_metrics = self.test_on_clients(self.current_round, clean_model)
-		# compute HR and NDCG for test
-		HR = 0.0
-		NDCG = 0.0
-		for metric in client_test_metrics:
-			HR = HR + metric[0]
-			NDCG = NDCG + metric[1]
-		mean_hr = float(HR)/len(client_test_metrics)
-		mean_ndcg = float(NDCG)/len(client_test_metrics)
-		# log
-		save_logs = {
-			"selected_clients": self.selected_clients,
-			"models": models,
-			"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
-			"server_model": self.model,
-			"clean_model": clean_model,
-			"unlearn_term_algo3": self.unlearn_term,
-			"unlearn_time": unlearn_time,
-			"HR_on_clients": mean_hr,
-			"NDCG_on_clients": mean_ndcg
 		}
 
 		pickle.dump(save_logs,
