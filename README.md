@@ -1,10 +1,9 @@
-<<<<<<< HEAD
 # CFRU
 Repo for 'Certified Unlearning for Federated Recommendation'
 
 ## QuickStart
 
-**First**, run the command below to get the MovieLens-1M Dataset (do the same for the case of Pinterest dataset):
+**First**, run the command below to get the MovieLens-1M Dataset (do the same for the case of Pinterest Dataset):
 
 ```sh
 # change to the ARDIS_DATASET_IV folder
