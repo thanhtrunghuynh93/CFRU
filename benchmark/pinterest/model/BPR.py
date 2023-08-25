@@ -40,20 +40,6 @@ class Model(FModule):
 		prediction_i = data[0]
 		prediction_j = data[1]
 		return - (prediction_i - prediction_j).sigmoid().log().sum()
-    
-	def handle_kd_loss(self, teacher_output, student_output):
-		kl_loss = torch.nn.KLDivLoss(reduction="batchmean")
-		def dist_loss(teacher, student, T=1):
-			# import pdb; pdb.set_trace()
-			prob_t = teacher/T
-			log_prob_s = torch.log(student/T)
-			# dist_loss = -(prob_t*log_prob_s).sum(dim=1).mean()
-			dist_loss = kl_loss(log_prob_s, prob_t)
-			return dist_loss
-		loss_student = - (student_output[0] - student_output[1]).sigmoid().log().sum()
-		dist_loss_pos = dist_loss(teacher_output[0], student_output[0])
-		dist_loss_neg = dist_loss(teacher_output[1], student_output[1])
-		return dist_loss_pos + dist_loss_neg #loss_student + 
 
 	def handle_test(self, data, top_k):
 		_, indices = torch.topk(data[0], top_k)

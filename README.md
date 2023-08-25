@@ -19,7 +19,7 @@ cd ....
 ```sh
 bash gen_data.sh
 ```
-The splited data will be stored in ` ./fedtask/mnist_cnum25_dist0_skew0_seed0/attack.json`.
+The splited data will be stored in ` ./fedtask/movielens1m_cnum100_dist0_skew0.0_seed0/data.json`.
 
 **Third**, run the command below to quickly run the experiment on MNIST dataset:
 
@@ -27,7 +27,7 @@ The splited data will be stored in ` ./fedtask/mnist_cnum25_dist0_skew0_seed0/at
 # all parameters are set in the file run_exp.sh
 bash run_exp.sh
 ```
-The result will be stored in ` ./fedtasksave/mnist_cnum25_dist0_skew0_seed0/R51_P0.30_alpha0.07/record/history51.pkl`.
+The result will be stored in ` ./fedtasksave/movielens1m_cnum100_dist0_skew0.0_seed0/record/history51.pkl`.
 
 **Finally**, run the command below to return accuracy:
 
