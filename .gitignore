@@ -12,5 +12,4 @@
 /utils/figures/
 *.txt
 *.npz
-*.sh
 *pymp*
