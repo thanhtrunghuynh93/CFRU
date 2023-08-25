@@ -618,12 +618,6 @@ class Client():
 		else:
 			# model.train()
 			print(self.datavol)
-			# loaded_npz = np.load(os.path.join(self.update_var_folder, str(self.name) + ".npz"), allow_pickle=True)
-			# self.candidate_nxt=list(loaded_npz["candidate_nxt"])
-			# self.candidate_cur=loaded_npz["candidate_cur"]
-			# self.score_cand_cur=loaded_npz["score_cand_cur"]
-			# self.score_cand_nxt=list(loaded_npz["score_cand_nxt"])
-			# self.score_pos_cur=loaded_npz["score_pos_cur"]
 			neg_items_this_round = set()
 			data_loader = self.calculator.get_data_loader(self.train_data, batch_size=self.batch_size)
 			optimizer = self.calculator.get_optimizer(self.optimizer_name, model, lr = self.learning_rate, weight_decay=self.weight_decay, momentum=self.momentum)
@@ -791,14 +785,6 @@ class Client():
 		"""
 		if self.drop_rate==0: return False
 		else: return (np.random.rand() < self.drop_rate)
-
-	# def train_loss(self, model):
-	#     """
-	#     Get the task specified loss of the model on local training data
-	#     :param model:
-	#     :return:
-	#     """
-	#     return self.test(model,'train')[1]
 
 	def valid_loss(self, model):
 		"""
