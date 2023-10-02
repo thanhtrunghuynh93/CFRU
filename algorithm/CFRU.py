@@ -133,7 +133,7 @@ class Server():
 			self.unlearn_time = logger.time_end('unlearning time')
 
 		if t >= self.option['num_rounds'] - 5:
-			self.save_important_update(t, important_weights, models)
+			self.save_result(t, models)
 		# check whether all the clients have dropped out, because the dropped clients will be deleted from self.selected_clients
 		if not self.selected_clients: return
 		# aggregate: pk = 1/K as default where K=len(selected_clients)
@@ -141,25 +141,22 @@ class Server():
 		# self.save_important_update(t, grads_this_round, models)
 		return
 
-	def save_result(self, round_num, models, unlearn_time):
+	def save_result(self, round_num, models):
 		if round_num >= self.option['num_rounds'] - 5:
 			# aggregate
 			temp_model = self.aggregate(models, p = [1.0 * self.client_vols[cid]/self.data_vol for cid in self.selected_clients])
 			# model clean with algo3
 			clean_model = temp_model + self.unlearn_term
-			test_unlearn, test_loss3, backdoor_unlearn = self.test(model= clean_model)
-			## clean metric 
-			test_clean, _, test_backdoor = self.test(model= temp_model)
+			# test unlearn
+			test_result_clean = self.test_on_clients(clean_model)
+			## test before unlearn
+			test_result_dirty = self.test_on_clients(temp_model)
 			# log
 			save_logs = {
 				"selected_clients": self.selected_clients,
-				"models": models,
-				"p": [1.0 * self.client_vols[cid] / self.data_vol for cid in self.selected_clients],
-				"server_model": self.model,
-				"accuracy": [test_clean, test_backdoor],
-				"unlearn_term_algo3": self.unlearn_term,
-				"unlearn_time": unlearn_time,
-				"accuracy_unlearn": [test_unlearn, backdoor_unlearn]
+				"accuracy": test_result_dirty,
+				"accuracy_unlearn": test_result_clean,
+				"unlearn_time": self.unlearn_time,
 			}
 		
 		pickle.dump(save_logs,
