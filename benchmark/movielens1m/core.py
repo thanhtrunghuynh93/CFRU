@@ -22,9 +22,6 @@ class TaskGen(DefaultTaskGen):
     def load_data(self):
         self.train_data, self.test_data, self.user_num, self.item_num, self.train_mat = self.load_all(os.path.join(self.rawdata_path, 'ml-1m.train.rating'),
                                                                                                       os.path.join(self.rawdata_path, 'ml-1m.test.negative'))
-        print('----Start loading removal data----')
-        self.removal_data = self.load_removal(user_removal=0)
-        print('----Finish loading removal data----')
 
     def load_all(self, train_path, test_path, test_num=100):
         """ We load all the three file here to save time in each epoch. """
@@ -58,19 +55,6 @@ class TaskGen(DefaultTaskGen):
                     test_data.append([u, int(i)])
                 line = fd.readline()
         return train_data, test_data, user_num, item_num, train_mat
-    
-    def load_removal(self, user_removal):
-        removal_data = []
-        with open(os.path.join(self.rawdata_path, 'ml-1m.backdoor.negative'), 'r') as fd:
-            line = fd.readline()
-            while line != None and line != '':
-                arr = line.split('\t')
-                u = eval(arr[0])[0]
-                removal_data.append([u, eval(arr[0])[1]])
-                for i in arr[1:]:
-                    removal_data.append([u, int(i)])
-                line = fd.readline()
-        return removal_data
 
 class TaskReader(XYTaskReader):
     def __init__(self, taskpath=''):

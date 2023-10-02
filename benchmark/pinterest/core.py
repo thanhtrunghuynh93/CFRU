@@ -22,9 +22,6 @@ class TaskGen(DefaultTaskGen):
     def load_data(self):
         self.train_data, self.test_data, self.user_num, self.item_num, self.train_mat = self.load_all(os.path.join(self.rawdata_path, 'pinterest-20.train.rating'),
                                                                                                       os.path.join(self.rawdata_path, 'pinterest-20.test.negative'))
-        print('----Start loading removal data----')
-        self.removal_data = self.load_removal(user_removal=0)
-        print('----Finish loading removal data----')
 
     def load_all(self, train_path, test_path, test_num=100):
         """ We load all the three file here to save time in each epoch. """
@@ -58,35 +55,6 @@ class TaskGen(DefaultTaskGen):
                     test_data.append([u, int(i)])
                 line = fd.readline()
         return train_data, test_data, user_num, item_num, train_mat
-    
-    def load_removal(self, user_removal):
-        removal_data = []
-        for data in self.test_data:
-            if data[0] == user_removal:
-                removal_data.append(data)
-        # randomly sample 100 
-        list_interacted = []
-        list_non_interacted = []
-        # latest item interaction
-        latest_item = removal_data[0][1]
-        list_interacted.append(latest_item)
-        for data in self.train_data:
-            if data[0] == user_removal:
-                list_interacted.append(data[1])
-        
-        for item in range(self.item_num):
-            if item not in list_interacted:
-                list_non_interacted.append(item)
-        # randomly generate test set
-        import random
-        random.seed(42)
-        for user in range(199):
-            removal_data.append([user_removal, latest_item])
-            random_selection = random.sample(list_non_interacted, 99)
-            for neg_item in random_selection:
-                removal_data.append([user_removal, neg_item])
-        # import pdb; pdb.set_trace()
-        return removal_data
 
 class TaskReader(XYTaskReader):
     def __init__(self, taskpath=''):

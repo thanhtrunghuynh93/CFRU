@@ -34,7 +34,6 @@ from torch import nn
 import torch.nn.functional as F
 ssl._create_default_https_context = ssl._create_unverified_context
 import importlib
-from benchmark.rec_loss import bpr_loss, l2_reg_loss
 import torchvision.transforms as transforms
 from random import shuffle,randint,choice,sample
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor
@@ -246,7 +245,6 @@ class DefaultTaskGen(BasicTaskGen):
 		# load from data
 		self.train_data = None
 		self.test_data = None
-		self.removal_data = None
 		self.user_num = None
 		self.item_num = None
 		self.local_user_idxs = None
@@ -354,7 +352,6 @@ class DefaultTaskGen(BasicTaskGen):
 			'client_names': self.cnames,
 			'dtrain': self.train_data,
 			'dtest': self.test_data,
-			'dbackdoor': self.removal_data,
 			'users_per_client': self.local_user_idxs,
 			'user_num': int(self.user_num),
 			'item_num': int(self.item_num),
@@ -640,7 +637,6 @@ class XYTaskReader(BasicTaskReader):
 				
 			train_datas = [BPRData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
 			test_data = BPRData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
-			backdoor_data = BPRData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
 		elif model_type == 'NCF':
 			train_info = {
 				'user_num': feddata['user_num'],
@@ -658,7 +654,6 @@ class XYTaskReader(BasicTaskReader):
 				
 			train_datas = [NCFData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
 			test_data = NCFData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
-			backdoor_data = NCFData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
 		elif model_type == 'LightGCN':
 			train_info = {
 				'user_num': feddata['user_num'],
@@ -677,10 +672,9 @@ class XYTaskReader(BasicTaskReader):
 				
 			train_datas = [GCNData(feddata[name]['client_train'], feddata['item_num'], feddata['train_mat'], num_ng, True) for name in feddata['client_names']]
 			test_data = GCNData(feddata['dtest'], feddata['item_num'], feddata['train_mat'], 0, False)
-			backdoor_data = GCNData(feddata['dbackdoor'], feddata['item_num'], None, 0, False)
 		else:
 			raise TypeError('Not exist model with name {}'.format(model_type))
-		return train_datas, test_data, backdoor_data, feddata['users_per_client'], train_info, clients_config, feddata['client_names']
+		return train_datas, test_data, feddata['users_per_client'], train_info, clients_config, feddata['client_names']
 
 class IDXTaskReader(BasicTaskReader):
 	def __init__(self, taskpath=''):

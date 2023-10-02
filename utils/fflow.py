@@ -35,6 +35,7 @@ def read_option():
     parser.add_argument('--proportion', help='proportion of clients sampled per round', type=float, default=0.3) # 0.3 / 1
     parser.add_argument('--theta_delta', help='coefficient multiply with delta each round', type=float, default=1) # 0.5 / 0.8 / 1
     parser.add_argument('--alpha', help='coefficient multiply with epsilon (difference between grad of U and grad of W)', type=float, default=1) # 0.5 / 0.8 / 1
+    parser.add_argument('--importance_prop', help='proportion of important items sampled for weight saving', type=float, default=0.5) 
     ## end
     
     
@@ -70,9 +71,6 @@ def read_option():
     # constructing the heterogeity of computing capability
     parser.add_argument('--capability', help="controlling the difference of local computing capability of each client", type=float, default=0)
     
-    # clean or not
-    parser.add_argument('--clean_model', help='clean_model equals 1 in order to run clean model and 0 otherwise', type=int, default=2)
-    
     # server gpu
     parser.add_argument('--server_gpu_id', help='server process on this gpu', type=int, default=0)
     
@@ -101,7 +99,7 @@ def initialize(option):
     utils.fmodule.TaskCalculator.setOP(getattr(importlib.import_module('torch.optim'), option['optimizer']))
     utils.fmodule.Model = getattr(importlib.import_module(bmk_model_path), 'Model')
     task_reader = getattr(importlib.import_module(bmk_core_path), 'TaskReader')(taskpath=os.path.join('fedtask', option['task']))
-    client_train_datas, test_data, backdoor_data, users_per_client, data_conf, clients_config, client_names= task_reader.read_data(option['num_ng'], option['model'])
+    client_train_datas, test_data, users_per_client, data_conf, clients_config, client_names= task_reader.read_data(option['num_ng'], option['model'])
     num_clients = len(client_names)
     # import pdb; pdb.set_trace()
     print("done")
@@ -136,7 +134,7 @@ def initialize(option):
     print("init server...", end='')
     #
     server_path = '%s.%s' % ('algorithm', option['algorithm'])
-    server = getattr(importlib.import_module(server_path), 'Server')(option, utils.fmodule.Model(data_conf, option).to(utils.fmodule.device), clients, test_data = test_data, backtask_data = backdoor_data)
+    server = getattr(importlib.import_module(server_path), 'Server')(option, utils.fmodule.Model(data_conf, option).to(utils.fmodule.device), clients, test_data = test_data)
     print('done')
     return server
 

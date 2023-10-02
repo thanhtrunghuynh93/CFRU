@@ -11,42 +11,18 @@ class MyLogger(flw.Logger):
             self.output = {
                 "meta":server.option,
                 "test_accs":[],
-                "backdoor_accs":[],
                 "client_test_accs":[],
-                "client_backdoor_accs":[],
                 "all_selected_clients":[]
             }
-        # if "mp_" in server.name:
-        #     test_metric, backdoor_metric = server.test(device=torch.device('cuda:0'))
-        # else:
-        #     test_metric, backdoor_metric = server.test()
         
-        client_test_metrics, client_backdoor_metrics = server.test_on_clients(self.current_round)
-        # compute HR and NDCG for test
-        HR = 0.0
-        NDCG = 0.0
-        for metric in client_test_metrics:
-            HR = HR + metric[0]
-            NDCG = NDCG + metric[1]
-        self.output['client_test_accs'].append([float(HR)/len(client_test_metrics), float(NDCG)/len(client_test_metrics)])
-        # compute HR and NDCG for backdoor
-        # HR = 0.0
-        # NDCG = 0.0
-        # for metric in client_backdoor_metrics:
-        #     HR = HR + metric[0]
-        #     NDCG = NDCG + metric[1]
-        # self.output['client_backdoor_accs'].append([float(HR)/len(client_backdoor_metrics), float(NDCG)/len(client_backdoor_metrics)])
-        # 
-        # self.output['test_accs'].append(test_metric)
-        # self.output['backdoor_accs'].append(backdoor_metric)
+        test_result = server.test_on_clients()
+
+        self.output['client_test_accs'].append(test_result)
+        
         self.output['all_selected_clients'].append([int(id) for id in server.selected_clients])
 
         print("Hit Ratio and NDCG for top {} recommendation!".format(server.topN))
-        # print("Testing Metric:")
-        # print(self.output['test_accs'][-1])
-        # print("Backdoor Metric:")
-        # print(self.output['backdoor_accs'][-1])
-        print("Client test: main test {}".format(self.output['client_test_accs'][-1]))
+        print("HR@{}:{} and  NDCG@{}:{}".format(server.topN, test_result[0], server.topN, test_result[1]))
         print("Selected clients in this round:")
         print(self.output['all_selected_clients'][-1])
 

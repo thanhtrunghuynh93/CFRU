@@ -21,19 +21,19 @@ bash gen_data.sh
 ```
 The splited data will be stored in ` ./fedtask/movielens1m_cnum100_dist0_skew0.0_seed0/data.json`.
 
-**Third**, run the command below to quickly run the experiment on MNIST dataset:
+**Third**, run the command below to quickly run the experiment on MovieLens-1M dataset:
 
 ```sh
 # all parameters are set in the file run_exp.sh
 bash run_exp.sh
 ```
-The result will be stored in ` ./fedtasksave/movielens1m_cnum100_dist0_skew0.0_seed0/record/history51.pkl`.
+The result will be stored in `./fedtasksave/movielens1m_cnum100_dist0_skew0_seed0/ULOpt_NCF_Mu8_R1_P0.30_alpha0.09_seed0_fedAttack/record/history0.pkl`.
 
 **Finally**, run the command below to return accuracy:
 
 ```sh
 # return accuracy
-python test_unlearn.py
+python CFRU_test.py
 # Main accuracy: ...
 # Backdoor accuracy: ...
 ```
