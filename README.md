@@ -27,13 +27,13 @@ The splited data will be stored in ` ./fedtask/movielens1m_cnum100_dist0_skew0.0
 # all parameters are set in the file run_exp.sh
 bash run_exp.sh
 ```
-The result will be stored in `./fedtasksave/movielens1m_cnum100_dist0_skew0_seed0/ULOpt_NCF_Mu8_R1_P0.30_alpha0.09_seed0_fedAttack/record/history0.pkl`.
+The result will be stored in `./fedtasksave/movielens1m_cnum100_dist0_skew0_seed0/CFRU_NCF_Mu8_R40_P0.30_alpha0.5_seed0_fedAttack/record/history40.pkl`.
 
 **Finally**, run the command below to return accuracy:
 
 ```sh
 # return accuracy
 python CFRU_test.py
-# Main accuracy: ...
-# Backdoor accuracy: ...
+# Hit Ratio and NDCG for top 10 recommendation!
+# HR@10:    ...    || NDCG@10:    ...
 ```
