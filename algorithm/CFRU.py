@@ -62,7 +62,7 @@ class Server():
 
 		## code from fedavg
 		self.path_save = os.path.join('fedtasksave', self.option['task'],
-									"ULOpt_{}_Mu{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
+									"CFRU_{}_Mu{}_R{}_P{:.2f}_alpha{}_seed{}_{}".format(
 										option['model'],
 										option['S1'],
 										option['num_rounds'],
