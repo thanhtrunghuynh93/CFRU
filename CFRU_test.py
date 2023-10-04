@@ -40,6 +40,6 @@ if __name__ == '__main__':
     with open(os.path.join(task_name, exp_name, 'record', 'history40.pkl'), 'rb') as test_f:
         hist_unlearn = CPU_Unpickler(test_f).load()
     print("Hit Ratio and NDCG for top 10 recommendation!")
-    print("HR@10: {}    || NDCG@10: {}".format(hist_unlearn['accuracy'][0], hist_unlearn['accuracy'][0]))
+    print("HR@10: {}    || NDCG@10: {}".format(hist_unlearn['accuracy_unlearn'][0], hist_unlearn['accuracy_unlearn'][1]))
     # pass
 
